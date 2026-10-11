@@ -1,0 +1,25 @@
+{
+  "name": "orbit-lab",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "fetch-catalog": "tsx scripts/fetch-catalog.ts"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "satellite.js": "^7.1.0",
+    "three": "^0.186.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
