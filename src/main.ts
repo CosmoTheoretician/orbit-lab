@@ -262,7 +262,7 @@ function earthContext(catalogValid: boolean): string {
   const ops = OPERATOR_ORDER.map((op) => line(STYLE[op].key, OPERATORS[op].color, `${OPERATORS[op].label} ${dim(String(counts[op]))}`, layers[op].visible));
   ops.push(line("m", MEOSPHERE_COLOR, `meoSphere phase 1, simulated ${dim(String(meo.count))}`, meo.group.visible));
   const status = catalogValid
-    ? dim(`catalog ${catalog.fetchedAt.slice(0, 16).replace("T", " ")} UTC · sgp4 ${propMs.toFixed(1)} ms · ${n} objects`)
+    ? dim(`catalog ${catalog.fetchedAt.slice(0, 16).replace("T", " ")} UTC · sgp4 ${propMs.toFixed(1)} ms · ${n} objects${failed > 0 ? ` · ${failed} failed` : ""}`)
     : dim("catalog hidden: shown time is >30 days from the catalog date");
   return `${ops.join("\n")}\n${status}`;
 }
