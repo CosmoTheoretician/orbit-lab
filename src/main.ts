@@ -40,26 +40,54 @@ scene.add(sunLight, sunLight.target);
 const earth = createEarth(BODIES.earth.equatorialRadius);
 world.add(earth);
 
-// ---------- catalog ----------
+// ---------- catalog: one layer per operator, sharing one position buffer ----------
+const OPERATOR_ORDER: Operator[] = ["ses", "starlink", "oneweb", "amazonLeo", "other"];
+
+/** SES in front; dense competitor shells faded so Earth and the SES fleet stay readable. */
+const STYLE: Record<Operator, { key: string; size: number; opacity: number }> = {
+  ses:       { key: "1", size: 4,   opacity: 1 },
+  starlink:  { key: "2", size: 1.5, opacity: 0.3 },
+  oneweb:    { key: "3", size: 2,   opacity: 0.7 },
+  amazonLeo: { key: "4", size: 2,   opacity: 0.8 },
+  other:     { key: "5", size: 1.5, opacity: 0.45 },
+};
+
 const catalog: CatalogFile = await (await fetch(`${import.meta.env.BASE_URL}data/catalog.json`)).json();
+// Sort once so each operator occupies a contiguous slice of the buffer (the worker gets the same order).
+catalog.entries.sort((a, b) => OPERATOR_ORDER.indexOf(a.operator) - OPERATOR_ORDER.indexOf(b.operator));
 const n = catalog.entries.length;
 
 const positions = new Float32Array(n * 3);
-const colors = new Float32Array(n * 3);
-const counts: Record<Operator, number> = { ses: 0, starlink: 0, oneweb: 0, amazonLeo: 0, other: 0 };
-catalog.entries.forEach((e, i) => {
-  const c = new THREE.Color(OPERATORS[e.operator].color);
-  colors.set([c.r, c.g, c.b], i * 3);
-  counts[e.operator]++;
-});
-
-const geom = new THREE.BufferGeometry();
 const posAttr = new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage);
-geom.setAttribute("position", posAttr);
-geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-const points = new THREE.Points(geom, new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true }));
-points.frustumCulled = false;
-world.add(points);
+
+const counts = {} as Record<Operator, number>;
+const layers = {} as Record<Operator, THREE.Points>;
+let start = 0;
+for (const op of OPERATOR_ORDER) {
+  const count = catalog.entries.filter((e) => e.operator === op).length;
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", posAttr);
+  geom.setDrawRange(start, count);
+
+  const st = STYLE[op];
+  const pts = new THREE.Points(
+    geom,
+    new THREE.PointsMaterial({
+      color: OPERATORS[op].color,
+      size: st.size,
+      sizeAttenuation: false,
+      transparent: st.opacity < 1,
+      opacity: st.opacity,
+      depthWrite: st.opacity >= 1,
+    }),
+  );
+  pts.frustumCulled = false;
+  world.add(pts);
+
+  counts[op] = count;
+  layers[op] = pts;
+  start += count;
+}
 
 // ---------- simulated meoSphere (J2 secular, own propagator) ----------
 const meo = createConstellationLayer(MEOSPHERE_PHASE1, Epoch.now());
@@ -83,7 +111,7 @@ worker.onmessage = (ev: MessageEvent<{ unixMs: number; buffer: ArrayBuffer; ms: 
   inFlight = false;
 };
 
-// ---------- clock ----------
+// ---------- clock & controls ----------
 let epoch = Epoch.now();
 let warp = 1;
 let paused = false;
@@ -94,16 +122,25 @@ addEventListener("keydown", (e) => {
   if (e.key === "[") warp = Math.max(warp / 2, 1 / 64);
   if (e.key === "r") { epoch = Epoch.now(); warp = 1; }
   if (e.key === "m") meo.group.visible = !meo.group.visible;
+  for (const op of OPERATOR_ORDER) {
+    if (e.key === STYLE[op].key) layers[op].visible = !layers[op].visible;
+  }
 });
 
 // ---------- HUD ----------
 const hud = document.getElementById("hud")!;
 const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
-const legend =
-  (Object.keys(OPERATORS) as Operator[])
-    .map((k) => `<span style="color:${hex(OPERATORS[k].color)}">●</span> ${OPERATORS[k].label} (${counts[k]})`)
-    .join("\n") +
-  `\n<span style="color:${hex(MEOSPHERE_COLOR)}">●</span> meoSphere phase 1, simulated (${meo.count})`;
+const legendLine = (key: string, color: number, label: string, visible: boolean) =>
+  `<span style="opacity:${visible ? 1 : 0.35}">[${key}] <span style="color:${hex(color)}">●</span> ${label}</span>`;
+
+function legend(): string {
+  const ops = OPERATOR_ORDER.map((op) =>
+    legendLine(STYLE[op].key, OPERATORS[op].color, `${OPERATORS[op].label} (${counts[op]})`, layers[op].visible),
+  );
+  ops.push(legendLine("m", MEOSPHERE_COLOR, `meoSphere phase 1, simulated (${meo.count})`, meo.group.visible));
+  return ops.join("\n");
+}
+
 let fps = 60;
 let lastHud = 0;
 
@@ -134,8 +171,9 @@ function frame(now: number) {
     lastHud = now;
     hud.innerHTML =
       `${new Date(displayedMs).toISOString().replace("T", " ").slice(0, 19)} UTC   warp ×${warp}${paused ? "  [paused]" : ""}\n` +
-      `render ${fps.toFixed(0)} fps   sgp4 ${propMs.toFixed(1)} ms / ${n} objects   failed ${failed}\n\n` +
-      `${legend}\n\n[space] pause  [ / ] warp  [r] now  [m] meoSphere`;
+      `render ${fps.toFixed(0)} fps   sgp4 ${propMs.toFixed(1)} ms / ${n} objects   failed ${failed}\n` +
+      `catalog fetched ${catalog.fetchedAt.replace("T", " ").slice(0, 16)} UTC\n\n` +
+      `${legend()}\n\n[space] pause  [ / ] warp  [r] now  [1-5, m] toggle layers`;
   }
   requestAnimationFrame(frame);
 }

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import type { CatalogEntry, CatalogFile, Operator } from "../src/catalog/types";
 
 /** Order matters: the first group that contains an object claims it. */
@@ -11,20 +11,48 @@ const SOURCES: Array<[Operator, string]> = [
   ["other", "active"],
 ];
 
+const OUT_DIR = "public/data";
+const OUT_FILE = `${OUT_DIR}/catalog.json`;
+const MIN_OBJECTS = 1000;
+/** Last deployed catalog, used when CelesTrak is unreachable (set in CI). */
+const FALLBACK_URL = process.env.CATALOG_FALLBACK_URL;
+
 const url = (group: string) =>
   `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=tle`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function main() {
+/**
+ * Retries only server errors (5xx) and network failures.
+ * A 4xx (e.g. 403 rate limit) is final: retrying it would only count as more downloads.
+ */
+async function fetchWithRetry(u: string, attempts = 3): Promise<Response | null> {
+  for (let k = 1; k <= attempts; k++) {
+    try {
+      const res = await fetch(u);
+      if (res.ok) return res;
+      console.warn(`  HTTP ${res.status} (attempt ${k}/${attempts})`);
+      if (res.status < 500) return null;
+    } catch (err) {
+      console.warn(`  ${(err as Error).message} (attempt ${k}/${attempts})`);
+    }
+    if (k < attempts) await sleep(5000 * k);
+  }
+  return null;
+}
+
+async function fromCelesTrak(): Promise<{ file: CatalogFile; failed: string[] }> {
   const byNorad = new Map<number, CatalogEntry>();
+  const failed: string[] = [];
 
   for (const [operator, group] of SOURCES) {
-    const res = await fetch(url(group));
-    if (!res.ok) {
-      console.warn(`skip ${group}: HTTP ${res.status}`);
+    console.log(`${group}:`);
+    const res = await fetchWithRetry(url(group));
+    if (!res) {
+      failed.push(group);
       continue;
     }
+
     const lines = (await res.text())
       .split(/\r?\n/)
       .map((l) => l.trimEnd())
@@ -45,18 +73,59 @@ async function main() {
         i += 1;
       }
     }
-    console.log(`${group.padEnd(10)} -> ${operator.padEnd(10)} +${added}`);
+    console.log(`  -> ${operator} +${added}`);
     await sleep(1000); // be polite; CelesTrak rate-limits repeated downloads
   }
 
-  const file: CatalogFile = { fetchedAt: new Date().toISOString(), entries: [...byNorad.values()] };
-  if (byNorad.size < 1000) {
-    console.error(`only ${byNorad.size} objects fetched; refusing to write a degraded catalog`);
-    process.exit(1);
+  return { file: { fetchedAt: new Date().toISOString(), entries: [...byNorad.values()] }, failed };
+}
+
+async function fromFallback(): Promise<CatalogFile | null> {
+  if (!FALLBACK_URL) return null;
+  console.warn(`trying last deployed catalog at ${FALLBACK_URL}`);
+  const res = await fetchWithRetry(FALLBACK_URL, 2);
+  if (!res) return null;
+  const file = (await res.json()) as CatalogFile;
+  return file.entries && file.entries.length >= MIN_OBJECTS ? file : null;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
   }
-  await mkdir("public/data", { recursive: true });
-  await writeFile("public/data/catalog.json", JSON.stringify(file));
-  console.log(`wrote ${file.entries.length} objects`);
+}
+
+async function write(file: CatalogFile) {
+  await mkdir(OUT_DIR, { recursive: true });
+  await writeFile(OUT_FILE, JSON.stringify(file));
+  console.log(`wrote ${file.entries.length} objects (fetched ${file.fetchedAt})`);
+}
+
+async function main() {
+  const { file, failed } = await fromCelesTrak();
+  if (failed.length === 0 && file.entries.length >= MIN_OBJECTS) return write(file);
+  console.warn(
+    failed.length > 0
+      ? `incomplete download (failed: ${failed.join(", ")}); not writing a partial catalog`
+      : `only ${file.entries.length} objects from CelesTrak`,
+  );
+
+  const fallback = await fromFallback();
+  if (fallback) {
+    console.warn("redeploying the previous catalog");
+    return write(fallback);
+  }
+
+  if (await exists(OUT_FILE)) {
+    console.warn(`keeping existing ${OUT_FILE}`);
+    return;
+  }
+
+  console.error("no usable catalog source; refusing to build without data");
+  process.exit(1);
 }
 
 main();
