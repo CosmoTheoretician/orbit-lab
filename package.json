@@ -7,13 +7,15 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "fetch-catalog": "tsx scripts/fetch-catalog.ts"
+    "fetch-catalog": "tsx scripts/fetch-catalog.ts",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
     "tsx": "^4.23.15",
     "typescript": "~6.0.2",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.3"
   },
   "dependencies": {
     "satellite.js": "^7.1.0",
