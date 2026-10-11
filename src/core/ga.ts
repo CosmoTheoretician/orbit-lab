@@ -87,4 +87,12 @@ export class Rotor {
       k * z - 2 * this.s * cz + 2 * dot * bz,
     ];
   }
+
+  /**
+   * The same rotation as a unit quaternion [x, y, z, w] (three.js order).
+   * Comparing the sandwich formula above with quaternion rotation gives q = (s, −b).
+   */
+  toQuaternion(): [number, number, number, number] {
+    return [-this.b23, -this.b31, -this.b12, this.s];
+  }
 }

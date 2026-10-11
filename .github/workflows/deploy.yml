@@ -30,6 +30,8 @@ jobs:
       - run: npm run fetch-catalog
         env:
           CATALOG_FALLBACK_URL: https://oliviersci.github.io/orbit-lab/data/catalog.json
+      - run: npm run fetch-orbiters
+        continue-on-error: true
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:

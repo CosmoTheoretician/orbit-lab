@@ -2,181 +2,187 @@
 
 ![Tests](https://github.com/oliviersci/orbit-lab/actions/workflows/deploy.yml/badge.svg)
 
-**A browser-based orbital environment and flight dynamics sandbox: the live satellite catalog, a validated SGP4 pipeline, and a simulated model of SES's next-generation meoSphere MEO constellation, propagated with a self-written J2 model built on geometric algebra.**
+**A browser-based orbital mechanics and flight dynamics sandbox: the live satellite catalog with a validated SGP4 pipeline, a simulated model of SES's meoSphere constellation, the whole solar system with real ephemerides, lunar missions from tracking data and from own reconstructions, a ground-station planner for SES HQ Betzdorf, and a relay-coverage analysis of lunar communication constellations.**
 
-> **Live demo:** [oliviersci.github.io/orbit-lab](https://oliviersci.github.io/orbit-lab/) · **Video:** _coming soon_
+> **Live demo:** [oliviersci.github.io/orbit-lab](https://oliviersci.github.io/orbit-lab/)
 
-![Orbit Lab: the SES fleet, competitor constellations and the simulated meoSphere planes](docs/screenshot.png)
+![Orbit Lab](docs/screenshot.png)
 
-Independent student project. Not affiliated with or endorsed by SES, SpaceX, Eutelsat, Amazon, or K2 Space. meoSphere parameters not published by SES (inclination, phasing) are explicitly marked as assumptions.
+Independent student project, not affiliated with or endorsed by SES or any other company mentioned. Wherever a value is assumed, modeled or representative rather than published, the app and this README say so.
 
 ---
 
+## Contents
+
+- [What it does](#what-it-does)
+- [Validation](#validation)
+- [Lunar missions](#lunar-missions)
+- [Ground station planner: SES HQ Betzdorf](#ground-station-planner-ses-hq-betzdorf)
+- [Lunar orbiters and relay coverage](#lunar-orbiters-and-relay-coverage)
+- [Technical highlights](#technical-highlights)
+- [Data pipeline and deployment](#data-pipeline-and-deployment)
+- [Getting started](#getting-started)
+- [Assumptions and limitations](#assumptions-and-limitations)
+- [Roadmap](#roadmap)
+- [Data sources and references](#data-sources-and-references)
+
 ## What it does
 
-- **Live orbital environment.** About 16,000 active objects from public CelesTrak data, propagated in real time with SGP4 in a Web Worker and rendered with Three.js.
-- **Operator layers.** SES (including the former Intelsat fleet and all 30 O3b / O3b mPOWER satellites), SpaceX Starlink, Eutelsat OneWeb, Amazon Leo, and all other active objects, each on its own toggleable layer. SES is drawn in front; the dense competitor shells are faded so the Earth and the SES fleet stay readable.
-- **Simulated meoSphere phase 1.** A configurable Walker Delta constellation (28 satellites, 4 planes, ~8,000 km) propagated with an own mean-element J2 model and drawn next to the real O3b fleet. It shows directly how meoSphere's inclined planes differ from O3b's equatorial orbit.
-- **Physically consistent scene.** Earth rotates by Greenwich sidereal time, the Sun direction comes from a low-precision ephemeris (so the day/night terminator is real), and every layer is drawn at the same epoch.
-- **Time control.** Real time, pause, and warp from 1/64× to 65,536×. At high warp you can watch J2 nodal regression slowly turn the meoSphere orbital planes westward.
-- **Transparent data age.** The HUD shows when the catalog was fetched, since public element sets are predictions whose accuracy degrades with age.
+**Earth orbit.** About 16,000 active objects from CelesTrak, propagated in real time with SGP4 in a Web Worker: SES (including the former Intelsat fleet and all 30 O3b / O3b mPOWER satellites), Starlink, OneWeb, Amazon Leo and all other active objects, each on its own toggleable layer. Next to them, a simulated **meoSphere** phase 1 constellation (28 satellites, 4 planes, ~8,000 km) propagated with an own J2 model built on geometric algebra. Any satellite can be selected to show its orbit, elements and element age.
+
+**The solar system.** All planets from JPL's approximate planetary elements, the Moon from the Astronomical Almanac formula, IAU rotation models for every body (including the Moon's thirteen libration terms), true sizes and oblateness, 8k textures loaded only for the focused body, Saturn's rings, and Earth with a day/night shader: city lights fade in through twilight, clouds hide them, oceans show sun glint. The sky is the real one: the Yale Bright Star Catalogue and NASA's Milky Way map, both precessed from J2000 into the same frame as everything else.
+
+**Lunar missions.** Government and commercial missions, flown and planned, with their landing or impact sites on the Moon. Trajectories come from JPL Horizons where available and from **own reconstructions** where operators never published tracking data.
+
+**Ground station.** Live pointing, range rate, Doppler shift and listening windows from SES HQ Betzdorf to any lunar site, with a line of sight drawn in the 3D view.
+
+**Lunar orbit population.** Operating orbiters from JPL Horizons (Moon-centred) and planned relay constellations, plus an analysis of how much they improve communications for the lunar south pole.
 
 ## Validation
 
-Validation is the core of this project: every model is checked against an independent reference, and every discrepancy is either explained or openly reported. The full suite runs automatically before every deployment.
-
 ### SGP4 against the official reference set
 
-The SGP4 pipeline is tested against the verification set from Vallado et al., *"Revisiting Spacetrack Report #3"* (AIAA 2006-6753): 33 test cases covering near-Earth, deep-space, resonant, and deliberately pathological orbits.
+Tested against the 33 cases of Vallado et al., *"Revisiting Spacetrack Report #3"* (AIAA 2006-6753).
 
 | Result | Cases |
 |---|---|
 | Match to the reference's print precision | 31 |
 | Correctly rejected (reference expects an error) | 1 (33334) |
-| Explained discrepancy, under investigation | 1 (23599) |
+| Explained discrepancy | 1 (23599) |
 
-**The tolerance comes from the data, not from a chosen threshold.** The reference prints positions to 10⁻⁸ km and velocities to 10⁻⁹ km/s. Rounding each component by at most half a unit bounds the vector error by √3/2 of a unit: 0.0087 mm in position and 0.87 µm/s in velocity. All 31 passing cases fall within these bounds (worst: 0.0081 mm, 0.853 µm/s), meaning agreement is exact to the precision the reference was printed.
+**The tolerance comes from the data.** The reference prints positions to 10⁻⁸ km and velocities to 10⁻⁹ km/s; rounding bounds the vector error by √3/2 of a unit (0.0087 mm, 0.87 µm/s). All 31 passing cases fall within that bound.
 
-**Case 23599: a discrepancy traced to a node crossing.** This low-inclination (6.93°), highly eccentric (e = 0.578) deep-space orbit shows a position difference of up to 0.96 km. Two observations identify the cause:
+**Case 23599 traced to a node crossing.** The error divided by the orbital radius is constant (a rigid rotation of ≈ 3.95 × 10⁻⁵ rad) and appears abruptly around t ≈ 410 min. J2 nodal regression, dΩ/dt = −(3/2) n J2 (R⊕/p)² cos i, carries the ascending node from 0.2849° through 0° after **≈ 417 minutes**, where SGP4's operating modes treat the node angle differently.
 
-1. The error divided by orbital radius is constant (≈ 3.95 × 10⁻⁵), so the two results differ by a small rigid rotation, not by random numerical error.
-2. Agreement is perfect until t ≈ 410 min, then the offset appears abruptly.
+**A formatting artifact in the reference file.** One line in the official output contains 24 concatenated states with a ~12-hour period, which cannot belong to satellite 20413 (period ~4 days). The harness detects and reports such lines.
 
-J2 nodal regression, dΩ/dt = −(3/2) n J2 (R⊕/p)² cos i, gives about −6.8 × 10⁻⁴ °/min for this orbit. Starting from Ω₀ = 0.2849°, the ascending node reaches 0° after **≈ 417 minutes**, exactly where the discrepancy begins. This is consistent with the documented difference in how SGP4's operating modes handle the node angle in the low-inclination deep-space branch. Confirmation is planned once the own SGP4 implementation can run both modes.
+### Geometric algebra and the J2 model
 
-**A formatting artifact in the reference output.** In the long-duration case for satellite 20413 (propagated 3.5 years past epoch, to a perigee physically inside the Earth), one line of the official reference file contains 24 concatenated states. Their ~12-hour period shows they belong to a different object (20413 takes about 4 days per orbit). The test harness detects such lines, skips them, and reports the count rather than silently dropping data. With that handled, the case matches exactly.
+- Rotors match the classical 3-1-3 rotation matrices to 10⁻⁹ km across 1,000 random orientations; a Python port with rotation matrices reproduces the TypeScript (rotor) ephemeris to below 0.05 µm.
+- With J2 = 0, orbits close after one period to below 1 mm; the orbital plane, read from the bivector r∧v, regresses at exactly the analytical J2 rate.
+- **Against Orekit (Python)** with identical physics, the along-track drift of 1,342 km over 7 days is fully explained by the mean-vs-osculating semi-major axis: first-order theory predicts 4.06 km, and a least-squares fit of mean elements to the Orekit trajectory independently finds **−4.0563 km against −4.0572 km**. Remaining residuals are bounded short-period terms.
 
-### Geometric algebra and J2 model
+### Integrator
 
-- **Rotors against rotation matrices:** the rotor composition R_Ω R_i R_ω matches the classical 3-1-3 rotation Rz(Ω) Rx(i) Rz(ω) to 10⁻⁹ km at 10⁴ km scale across 1,000 random orientations, and composed rotors stay normalized (R R̃ = 1).
-- **Two-body limit:** with J2 = 0, orbits close after one period to below 1 mm, and |r∧v| equals √(μp) to 12 significant digits.
-- **Secular J2 drift:** the orbital plane, read directly from the bivector r∧v, regresses at exactly the analytical J2 rate (to 10⁻¹² rad over 30 days), with inclination constant.
+The adaptive Dormand–Prince 5(4) integrator closes a circular orbit after 10 periods to within 10 m, integrates backward to its starting state, and its error shrinks by more than 10× when the tolerance is tightened 100×.
+
+## Lunar missions
+
+**From tracking data:** Artemis I and II, Chandrayaan-3, SLIM, Danuri, CAPSTONE and others come from JPL Horizons. During a mission, the Moon is placed from the same ephemeris, so the arrival geometry is exact.
+
+**Reconstructed from published milestones (Intuitive Machines).** No public tracking data exists, so the trajectory is solved in an Earth–Moon–Sun model: backward from the landing (site, time, published orbit altitudes, descent orbit insertion and powered descent), then a three-body transfer solved by Newton iteration from lunar orbit insertion back to a 200 km perigee at trans-lunar injection. Arrival is coplanar, and among solutions the lowest-Δv one is kept. Independent checks against published numbers:
+
+| | Model | Published |
+|---|---|---|
+| IM-1 LOI Δv | 854 m/s | 800 m/s |
+| IM-1 orbit altitude implied by the timing | 98.6 km | 92 km |
+| IM-1 approach | from the northeast, over Schomberger crater (used as a constraint) | Schomberger imaged ~200 km uprange |
+| IM-1 transfer distance | 470,000 km | over 1,000,000 km |
+| IM-2 transfer time | 4.47 days | 4.5 days |
+| IM-2 lunar revolutions | 40.5 | about 39 |
+
+The distance mismatch survives every model variant: **Odysseus did not fly a simple direct transfer**, and its LOI time also presses against the published bounds. The model shows where reality was more complex.
+
+**Lunar operations (ispace).** HAKUTO-R and Resilience flew multi-month low-energy transfers, which are not reconstructed yet. Their lunar phase is modeled from published milestones: capture orbit, gradual lowering to 100 km, descent, and for HAKUTO-R a free fall from 5 km after its propellant ran out (≈ 127 m/s impact).
+
+## Ground station planner: SES HQ Betzdorf
+
+Pointing, Doppler and listening windows from Betzdorf (WGS84, Earth rotation via GMST) to a lunar site, live in the app and as a command-line planner. Checks against first principles:
+
+- **Doppler** from Earth's rotation: 0.465 km/s × cos 49.69° ≈ 0.30 km/s → ±2.2 kHz at 2.2 GHz; planner: −2.4 … +2.5 kHz including the Moon's motion. **Doppler rate** 2.2 kHz × 7.29 × 10⁻⁵ rad/s ≈ 0.16 Hz/s; planner: 0.13–0.15 Hz/s.
+- **Earth seen from Reiner Gamma** (IM-3, 59°W): 90° − 59° ≈ 31° ± libration; planner: 25–36°.
+- **Earth seen from Athena's site** (84.8°S): −2.2° to +10.7°; Earth sets for days at a time, and those days have no listening windows from anywhere on Earth.
+
+The downlink frequency in the app is a placeholder until a mission's filed frequency is known.
+
+## Lunar orbiters and relay coverage
+
+Operating orbiters (LRO, Chandrayaan-2, Danuri, CAPSTONE, ARTEMIS P1/P2) come from JPL Horizons **relative to the Moon's centre**, so they circle the rendered Moon correctly even though the analytical Moon is only accurate to ~0.3°. Planned constellations (Intuitive Machines' Lunar Data Network, ESA's Lunar Pathfinder and Moonlight) use **representative** elliptical lunar frozen orbits with apolune over the south pole, since their exact elements are not published. Queqiao-2 uses its published orbit shape with an assumed orientation.
+
+**Relay coverage for Athena's site (84.8°S), 30 days, relay elevation ≥ 10°, flat horizon:**
+
+| Network | Direct to Earth | Via relay | Combined | Longest gap without any link | Relays in view (mean) |
+|---|---|---|---|---|---|
+| Direct to Earth only | 64.0% | — | 64.0% | 149.9 h | — |
+| 1 frozen-orbit relay (Lunar Pathfinder class) | 64.0% | 72.4% | 90.0% | 3.8 h | 0.72 |
+| 5 frozen-orbit relays (IM or Moonlight class) | 64.0% | 100% | 100% | 0 h | 3.61 |
+| 10 relays (IM + Moonlight, interoperable) | 64.0% | 100% | 100% | 0 h | 7.22 |
+
+A south-polar lander relying only on direct contact loses Earth for up to **six days** at a time, before terrain is even considered; one relay cuts that to under four hours, and five eliminate it. The IM and Moonlight rows are identical because both use the same representative orbit class. Queqiao-2's result at the south pole (0%) depends entirely on its unpublished orientation and is treated as inconclusive.
 
 ## Technical highlights
 
-**Geometric algebra for orbit geometry.** The orbital plane is represented as the bivector L = r∧v, which carries both the plane's orientation and the angular momentum magnitude. Orbit orientation is a rotor composed of rotations named by the planes they act in (e₁∧e₂ for the equator), applied by the sandwich product v' = R v R̃. The same rotor places the satellites and draws their orbital rings. In 3D, rotors are isomorphic to unit quaternions, so there's no performance cost; the GA form maps directly onto how orbital angles are defined.
+- **Geometric algebra** for orbit geometry: orbital planes as bivectors (r∧v), orientations as rotors (v' = R v R̃), used for satellite orbits, planetary orbits, IAU body orientations and lunar landing geometry.
+- **One consistent frame.** Everything is drawn in the mean equator and equinox of date (≈ TEME): stars, planetary elements and Horizons data are precessed from J2000 with the IAU 1976 model.
+- **Rigorous time.** TT seconds since J2000 internally, full leap-second table, TDB for planetary work.
+- **Scale from LEO to Neptune** with logarithmic depth and camera-relative double-precision transforms; physics in km and float64 throughout.
+- **Own flight dynamics tools:** J2 secular propagator, adaptive Dormand–Prince integrator, cislunar Earth–Moon–Sun force model, Newton shooting with minimal-norm steps, Hermite interpolation of trajectories.
 
-**Rigorous time handling.** An `Epoch` stores TT seconds since J2000.0 (sub-microsecond resolution), with conversions from UTC through the full leap-second table (TAI − UTC) and to TDB for planetary ephemerides.
+## Data pipeline and deployment
 
-**Explicit frames.** Every state vector carries its origin body and axes (`TEME`, `ICRF`, `ITRF`, `MOON_PA`, `IAU_MARS`) to prevent silent frame mixing, the classic multi-body bug. This prepares the code for lunar and Mars extensions.
+A GitHub Actions workflow tests, fetches and deploys to GitHub Pages on every push and every six hours:
 
-**Physics in kilometers, rendering scaled separately.** All physics runs in km and float64; only a single scene group scales to render units. This keeps the door open for floating-origin rendering at interplanetary distances, where float32 positions would jitter by kilometers.
+1. The full test suite runs first; a failing test stops deployment.
+2. The satellite catalog is fetched from CelesTrak, all-or-nothing, rate-limit aware, with fallback to the last deployed catalog.
+3. Lunar orbiter ephemerides are refreshed from JPL Horizons (failures fall back to the committed data).
+4. Vite builds the site; GitHub Pages serves it.
 
-**Efficient layering.** The catalog is sorted by operator once, so each operator occupies a contiguous slice of a single shared GPU position buffer. Each layer draws only its slice, so toggling and per-operator styling cost nothing per frame.
-
-**Performance baseline.** SGP4 for 15,939 objects takes about 27–37 ms per batch in JavaScript (≈ 1.7–2.3 µs per object) in a Web Worker, while rendering stays near 50–60 fps. These numbers are the baseline for the planned WebGPU port.
-
-## Deployment and data pipeline
-
-The app is a static site, built with Vite and deployed to GitHub Pages by a GitHub Actions workflow (`.github/workflows/deploy.yml`) that runs on every push to `main` and every six hours:
-
-1. **Test:** the full validation suite runs first; a failing test stops the deployment.
-2. **Fetch:** the catalog is downloaded from CelesTrak, once per run for all visitors. Visitors' browsers only load the finished file from GitHub Pages and never contact CelesTrak.
-3. **Build and deploy:** Vite builds the site, including the catalog, and GitHub Pages serves it.
-
-The fetch step is designed to fail safe:
-
-- **All or nothing:** a catalog is only accepted if every operator group downloaded successfully. A partial download is never deployed.
-- **Rate-limit aware:** only server errors and network failures are retried. A 4xx response, such as CelesTrak's rate limit, is final, since retrying would only count as more downloads.
-- **Fallback:** if CelesTrak is unavailable, the workflow redeploys the last good catalog from the live site, so the app keeps working with slightly older data. The HUD always shows the catalog's actual fetch time.
+Mission trajectories, reconstructions, textures and star data are static and committed.
 
 ## Getting started
 
-Requirements: Node.js 20+ (developed on Node 24 under WSL2/Ubuntu).
+```bash
+npm install
+npm run fetch-catalog        # satellite catalog (CelesTrak)
+npm run fetch-orbiters       # lunar orbiters (JPL Horizons)
+npm run dev                  # http://localhost:5173/orbit-lab/
+npm test                     # validation suite
+```
+
+Further data and analysis scripts:
 
 ```bash
-git clone git@github.com:oliviersci/orbit-lab.git
-cd orbit-lab
-npm install
-npm run fetch-catalog   # downloads the current catalog from CelesTrak into public/data/
-npm run dev             # starts the app at http://localhost:5173/orbit-lab/
-npm test                # runs the validation suite
-npm run build           # type-checks and builds the production site into dist/
-npm run preview         # serves the production build at http://localhost:4173/orbit-lab/
+npm run fetch-stars                          # Yale Bright Star Catalogue (VizieR)
+npm run fetch-missions                       # lunar mission trajectories (JPL Horizons)
+npm run reconstruct-missions                 # Intuitive Machines reconstructions, ispace lunar operations
+npx tsx scripts/plan-listening.ts im-3 30    # listening windows from Betzdorf
+npm run relay-coverage im-2 30               # relay coverage for a lunar site
+python scripts/fetch_textures.py             # planet textures (Python venv, see validation/requirements.txt)
 ```
 
-The catalog is not committed because it changes constantly. CelesTrak updates its data about every two hours and rate-limits repeated downloads, so avoid fetching more often than that.
-
-### Controls
-
-| Key | Action |
-|---|---|
-| Mouse drag / scroll | Rotate / zoom |
-| `Space` | Pause / resume |
-| `]` / `[` | Double / halve time warp |
-| `r` | Reset to current time, 1× speed |
-| `1` – `5` | Toggle SES, Starlink, OneWeb, Amazon Leo, other active |
-| `m` | Toggle simulated meoSphere |
-
-When the app is embedded in another page, click the view first so it receives keyboard input.
-
-## Project structure
-
-```
-src/
-  core/
-    time.ts            Epoch: UTC/TAI/TT/TDB, leap seconds
-    bodies.ts          Body constants, frame-tagged StateVector, EphemerisProvider interface
-    sun.ts             Low-precision Sun direction
-    ga.ts              Geometric algebra G(3,0): bivectors, wedge product, rotors
-  orbit/
-    kepler.ts          Kepler's equation solver
-    j2secular.ts       Mean-element J2 secular propagator
-    walker.ts          Walker Delta generator, meoSphere phase 1 configuration
-  propagation/
-    sgp4.worker.ts     Catalog-wide SGP4 in a Web Worker
-  render/
-    earth.ts           Earth with graticule (body-fixed frame)
-    constellation.ts   Simulated constellation layer with orbital-plane rings
-  catalog/
-    types.ts           Catalog types, operator colors
-  main.ts              Scene, operator layers, clock, HUD
-scripts/
-  fetch-catalog.ts     CelesTrak download: operator classification, fail-safe fallback
-  diag-case.ts         Per-row diagnostics for SGP4 verification cases
-test/
-  sgp4/                SGP4 verification against AIAA 2006-6753
-  orbit/               Rotor and J2 propagator tests
-  fixtures/sgp4/       Pinned reference data with SHA-256 checksums
-.github/workflows/
-  deploy.yml           Test, fetch, build and deploy; scheduled every 6 hours
-docs/
-  screenshot.png       README screenshot
-vite.config.ts         Base path for GitHub Pages, ES-module workers
-```
+**Keys:** `space` pause · `[` `]` warp · `r` now · `,` `.` previous/next body · `e` Earth · `o` Moon · `1`–`5` operator layers · `m` meoSphere · `g` Earth grid · `l` lunar missions · `b` ground station · `n` lunar orbiters · click to select · `h` help.
 
 ## Assumptions and limitations
 
-- **meoSphere geometry:** SES has published 28 satellites, 4 planes, and ~8,000 km altitude for phase 1. Inclination (70°) and Walker phasing (F = 1) are assumptions, configurable in `src/orbit/walker.ts`.
-- **J2 model:** first-order secular theory on mean elements; short-period J2 terms, drag, solar radiation pressure, and third-body effects are not modeled. Velocity omits the slow rotation of the orbital plane itself (|Ω̇|/n ≈ 3 × 10⁻⁴ at MEO).
-- **Frames:** the scene uses TEME as its inertial frame; precession and nutation to GCRF are not yet applied. UT1 is approximated by UTC (≤ 0.9 s, about 0.4 km at the equator).
-- **Catalog accuracy:** public element sets are predictions, typically hours to a day old. SGP4 accuracy is around 1 km at epoch and degrades by kilometers per day in LEO, especially for frequently maneuvering satellites.
-- **SGP4 implementation:** currently uses satellite.js; an own implementation is next on the roadmap.
+- **meoSphere:** inclination (70°) and phasing assumed; SES has published 28 satellites, 4 planes and ~8,000 km.
+- **Reconstructions** are models from public milestones, not tracking data; assumptions are listed per mission in the app.
+- **Planned lunar constellations** use representative orbits; their exact elements are not published.
+- **Analytical ephemerides:** Moon ~0.3°, planets ~arcminutes; Horizons data is used where precision matters.
+- **Coverage and planner** assume a flat local horizon; real terrain near the poles reduces visibility further.
+- **Catalog accuracy:** public elements are predictions, typically hours to a day old.
 
 ## Roadmap
 
-- [x] Live catalog with operator classification and real-time SGP4
-- [x] SGP4 validation harness against AIAA 2006-6753
-- [x] Geometric algebra core and J2 secular propagator
-- [x] Simulated meoSphere phase 1 layer
-- [x] Per-operator layers with toggles; catalog age in the HUD
-- [x] Automated testing and deployment with a fail-safe data pipeline
-- [ ] Satellite selection and info panel (name, orbit, element age)
-- [ ] Python / Orekit comparison: J2 secular model against full numerical propagation
-- [ ] Own SGP4 implementation, validated with the existing harness, including both operating modes to confirm case 23599
-- [ ] WebGPU compute port of SGP4, with float32 precision error quantified against float64
-- [ ] Numerical propagator: adaptive Dormand–Prince integrator, gravity field, lunar/solar third body, SRP, drag
-- [ ] Constellation analysis: coverage, inter-satellite visibility, conjunction screening during deployment
-- [ ] Earth–Moon extension: ephemerides, lunar frames, floating-origin rendering
+- [x] Live catalog, SGP4 validation, J2 propagator with geometric algebra, meoSphere layer
+- [x] Python/Orekit validation and mean-element fitting
+- [x] Solar system, real sky, Earth night side
+- [x] Lunar missions: Horizons trajectories, Intuitive Machines reconstructions, ispace lunar operations
+- [x] Ground station planner and live panel for SES HQ Betzdorf
+- [x] Lunar orbiters and relay coverage analysis
+- [ ] ispace low-energy transfers: multi-segment solver checked against HAKUTO-R's ~1.4 million km and Resilience's lunar flyby
+- [ ] Blue Ghost Mission 1 reconstruction (Earth phasing orbits)
+- [ ] Terrain horizons from lunar elevation data for the planner and coverage analysis
+- [ ] Own SGP4 implementation and WebGPU port
 
 ## Data sources and references
 
-- **Orbital elements:** [CelesTrak](https://celestrak.org), Dr. T.S. Kelso.
-- **SGP4 verification data:** Vallado, D. A., Crawford, P., Hujsak, R., and Kelso, T. S., "Revisiting Spacetrack Report #3," AIAA/AAS Astrodynamics Specialist Conference, Keystone, CO, 2006, AIAA 2006-6753. Test elements (`SGP4-VER.TLE`) and reference output (`tmatverDec2015.out`) from the [CelesTrak distribution](https://celestrak.org/publications/AIAA/2006-6753/).
-- **SGP4 library:** [satellite.js](https://github.com/shashwatak/satellite-js).
-- **meoSphere public parameters:** SES and K2 Space announcement, March 2026.
-- **Geometric algebra:** Hestenes, D., *New Foundations for Classical Mechanics*; Doran, C. and Lasenby, A., *Geometric Algebra for Physicists*.
+- **Satellite catalog:** CelesTrak (T.S. Kelso). **SGP4 verification:** Vallado, Crawford, Hujsak and Kelso, "Revisiting Spacetrack Report #3," AIAA 2006-6753.
+- **Trajectories and lunar orbiters:** NASA/JPL Horizons.
+- **Planetary elements:** E.M. Standish, "Approximate Positions of the Planets" (JPL). **Rotation models:** IAU WGCCRE (Archinal et al.).
+- **Planet textures:** Solar System Scope, CC BY 4.0. **Milky Way:** NASA/Goddard Space Flight Center Scientific Visualization Studio, Deep Star Maps 2020. **Stars:** Yale Bright Star Catalogue (Hoffleit & Warren), via CDS VizieR.
+- **Mission milestones:** Intuitive Machines, ispace, NASA (NSSDCA), ESA and CNSA announcements, and the press coverage cited per mission in `src/missions/catalog.ts` and `src/lunar/orbiters.ts`.
+- **Validation:** Orekit (CS Group); geometric algebra after Hestenes and Doran & Lasenby.
 
 ## Author
 
-Built by [@oliviersci](https://github.com/oliviersci), physics student, as a flight dynamics portfolio project.
+Built by [@oliviersci](https://github.com/oliviersci), physics student.

@@ -8,7 +8,12 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "fetch-catalog": "tsx scripts/fetch-catalog.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fetch-stars": "tsx scripts/fetch-stars.ts",
+    "fetch-missions": "tsx scripts/fetch-missions.ts",
+    "reconstruct-missions": "tsx scripts/reconstruct-missions.ts",
+    "fetch-orbiters": "tsx scripts/fetch-orbiters.ts",
+    "relay-coverage": "tsx scripts/relay-coverage.ts"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
