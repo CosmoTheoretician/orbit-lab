@@ -41,7 +41,7 @@ const earth = createEarth(BODIES.earth.equatorialRadius);
 world.add(earth);
 
 // ---------- catalog ----------
-const catalog: CatalogFile = await (await fetch("/data/catalog.json")).json();
+const catalog: CatalogFile = await (await fetch(`${import.meta.env.BASE_URL}data/catalog.json`)).json();
 const n = catalog.entries.length;
 
 const positions = new Float32Array(n * 3);
