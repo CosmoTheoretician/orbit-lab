@@ -50,6 +50,10 @@ async function main() {
   }
 
   const file: CatalogFile = { fetchedAt: new Date().toISOString(), entries: [...byNorad.values()] };
+  if (byNorad.size < 1000) {
+    console.error(`only ${byNorad.size} objects fetched; refusing to write a degraded catalog`);
+    process.exit(1);
+  }
   await mkdir("public/data", { recursive: true });
   await writeFile("public/data/catalog.json", JSON.stringify(file));
   console.log(`wrote ${file.entries.length} objects`);
