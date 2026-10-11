@@ -57,11 +57,19 @@ export class J2SecularPropagator {
     this.rates = j2SecularRates(el, gm, re, j2);
   }
 
-  /** State dt seconds after the element epoch. km, km/s. */
-  stateAt(dt: number): { r: Vec3; v: Vec3 } {
-    const { a, e, i } = this.el;
+  /**
+   * Rotor taking perifocal axes to inertial axes, dt seconds after the element epoch:
+   * turn by ω within the orbital plane, tilt by i, then turn by Ω in the equator.
+   */
+  orientationAt(dt: number): Rotor {
     const raan = this.el.raan + this.rates.raanDot * dt;
     const argp = this.el.argp + this.rates.argpDot * dt;
+    return Rotor.inPlane("e12", raan).mul(Rotor.inPlane("e23", this.el.i)).mul(Rotor.inPlane("e12", argp));
+  }
+
+  /** State dt seconds after the element epoch. km, km/s. */
+  stateAt(dt: number): { r: Vec3; v: Vec3 } {
+    const { a, e } = this.el;
     const M = this.el.M + this.rates.mDot * dt;
 
     const E = solveKepler(M, e);
@@ -72,8 +80,7 @@ export class J2SecularPropagator {
     const vScale = Math.sqrt(this.gm / a) / (1 - e * cE);
     const vPf: Vec3 = [-vScale * sE, vScale * q * cE, 0];
 
-    // perifocal → inertial: turn by ω within the orbital plane, tilt by i, then turn by Ω in the equator
-    const R = Rotor.inPlane("e12", raan).mul(Rotor.inPlane("e23", i)).mul(Rotor.inPlane("e12", argp));
+    const R = this.orientationAt(dt);
     return { r: R.apply(rPf), v: R.apply(vPf) };
   }
 }

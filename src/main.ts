@@ -5,6 +5,8 @@ import { Epoch } from "./core/time";
 import { BODIES } from "./core/bodies";
 import { sunDirection } from "./core/sun";
 import { createEarth } from "./render/earth";
+import { createConstellationLayer, MEOSPHERE_COLOR } from "./render/constellation";
+import { MEOSPHERE_PHASE1 } from "./orbit/walker";
 import { OPERATORS, type CatalogFile, type Operator } from "./catalog/types";
 
 // ---------- renderer & scene ----------
@@ -59,6 +61,10 @@ const points = new THREE.Points(geom, new THREE.PointsMaterial({ size: 2, sizeAt
 points.frustumCulled = false;
 world.add(points);
 
+// ---------- simulated meoSphere (J2 secular, own propagator) ----------
+const meo = createConstellationLayer(MEOSPHERE_PHASE1, Epoch.now());
+world.add(meo.group);
+
 // ---------- propagation worker ----------
 const worker = new Worker(new URL("./propagation/sgp4.worker.ts", import.meta.url), { type: "module" });
 worker.postMessage({ type: "init", entries: catalog.entries });
@@ -87,13 +93,17 @@ addEventListener("keydown", (e) => {
   if (e.key === "]") warp = Math.min(warp * 2, 65536);
   if (e.key === "[") warp = Math.max(warp / 2, 1 / 64);
   if (e.key === "r") { epoch = Epoch.now(); warp = 1; }
+  if (e.key === "m") meo.group.visible = !meo.group.visible;
 });
 
 // ---------- HUD ----------
 const hud = document.getElementById("hud")!;
-const legend = (Object.keys(OPERATORS) as Operator[])
-  .map((k) => `<span style="color:#${OPERATORS[k].color.toString(16).padStart(6, "0")}">●</span> ${OPERATORS[k].label} (${counts[k]})`)
-  .join("\n");
+const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
+const legend =
+  (Object.keys(OPERATORS) as Operator[])
+    .map((k) => `<span style="color:${hex(OPERATORS[k].color)}">●</span> ${OPERATORS[k].label} (${counts[k]})`)
+    .join("\n") +
+  `\n<span style="color:${hex(MEOSPHERE_COLOR)}">●</span> meoSphere phase 1, simulated (${meo.count})`;
 let fps = 60;
 let lastHud = 0;
 
@@ -110,10 +120,12 @@ function frame(now: number) {
     worker.postMessage({ type: "propagate", unixMs: epoch.toUnixMs() });
   }
 
-  // Rotate Earth with the epoch of the positions on screen so both stay consistent.
+  // Everything is drawn at the epoch of the catalog positions on screen, so all layers stay consistent.
+  const shown = Epoch.fromUnixMs(displayedMs);
   earth.rotation.z = gstime(new Date(displayedMs));
-  const s = sunDirection(Epoch.fromUnixMs(displayedMs));
+  const s = sunDirection(shown);
   sunLight.position.set(s[0] * 100, s[1] * 100, s[2] * 100);
+  meo.update(shown);
 
   controls.update();
   renderer.render(scene, camera);
@@ -123,7 +135,7 @@ function frame(now: number) {
     hud.innerHTML =
       `${new Date(displayedMs).toISOString().replace("T", " ").slice(0, 19)} UTC   warp ×${warp}${paused ? "  [paused]" : ""}\n` +
       `render ${fps.toFixed(0)} fps   sgp4 ${propMs.toFixed(1)} ms / ${n} objects   failed ${failed}\n\n` +
-      `${legend}\n\n[space] pause  [ / ] warp  [r] now`;
+      `${legend}\n\n[space] pause  [ / ] warp  [r] now  [m] meoSphere`;
   }
   requestAnimationFrame(frame);
 }
