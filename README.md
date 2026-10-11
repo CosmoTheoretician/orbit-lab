@@ -1,10 +1,12 @@
 # Orbit Lab
 
+![Tests](https://github.com/oliviersci/orbit-lab/actions/workflows/deploy.yml/badge.svg)
+
 **A browser-based orbital environment and flight dynamics sandbox: the live satellite catalog, a validated SGP4 pipeline, and a simulated model of SES's next-generation meoSphere MEO constellation, propagated with a self-written J2 model built on geometric algebra.**
 
-> **Live demo:** _link coming soon_ · **Video:** _link coming soon_
+> **Live demo:** [oliviersci.github.io/orbit-lab](https://oliviersci.github.io/orbit-lab/) · **Video:** _coming soon_
 
-![screenshot](docs/screenshot.png)
+![Orbit Lab: the SES fleet, competitor constellations and the simulated meoSphere planes](docs/screenshot.png)
 
 Independent student project. Not affiliated with or endorsed by SES, SpaceX, Eutelsat, Amazon, or K2 Space. meoSphere parameters not published by SES (inclination, phasing) are explicitly marked as assumptions.
 
@@ -12,14 +14,16 @@ Independent student project. Not affiliated with or endorsed by SES, SpaceX, Eut
 
 ## What it does
 
-- **Live orbital environment.** About 16,000 active objects from public CelesTrak data, propagated in real time with SGP4 in a Web Worker and rendered with Three.js. Operators are color-coded: SES (including the former Intelsat fleet and all 30 O3b / O3b mPOWER satellites), SpaceX Starlink, Eutelsat OneWeb, Amazon Leo, and everything else active.
+- **Live orbital environment.** About 16,000 active objects from public CelesTrak data, propagated in real time with SGP4 in a Web Worker and rendered with Three.js.
+- **Operator layers.** SES (including the former Intelsat fleet and all 30 O3b / O3b mPOWER satellites), SpaceX Starlink, Eutelsat OneWeb, Amazon Leo, and all other active objects, each on its own toggleable layer. SES is drawn in front; the dense competitor shells are faded so the Earth and the SES fleet stay readable.
 - **Simulated meoSphere phase 1.** A configurable Walker Delta constellation (28 satellites, 4 planes, ~8,000 km) propagated with an own mean-element J2 model and drawn next to the real O3b fleet. It shows directly how meoSphere's inclined planes differ from O3b's equatorial orbit.
-- **Physically consistent scene.** Earth rotates by Greenwich sidereal time, the Sun direction is computed from a low-precision ephemeris (so the day/night terminator is real), and every layer is drawn at the same epoch.
+- **Physically consistent scene.** Earth rotates by Greenwich sidereal time, the Sun direction comes from a low-precision ephemeris (so the day/night terminator is real), and every layer is drawn at the same epoch.
 - **Time control.** Real time, pause, and warp from 1/64× to 65,536×. At high warp you can watch J2 nodal regression slowly turn the meoSphere orbital planes westward.
+- **Transparent data age.** The HUD shows when the catalog was fetched, since public element sets are predictions whose accuracy degrades with age.
 
 ## Validation
 
-Validation is the core of this project: every model is checked against an independent reference, and every discrepancy is either explained or openly reported.
+Validation is the core of this project: every model is checked against an independent reference, and every discrepancy is either explained or openly reported. The full suite runs automatically before every deployment.
 
 ### SGP4 against the official reference set
 
@@ -50,7 +54,7 @@ J2 nodal regression, dΩ/dt = −(3/2) n J2 (R⊕/p)² cos i, gives about −6.8
 
 ## Technical highlights
 
-**Geometric algebra for orbit geometry.** The orbital plane is represented as the bivector L = r∧v, which carries both the plane's orientation and the angular momentum magnitude. Orbit orientation is a rotor composed of rotations named by the planes they act in (e₁∧e₂ for the equator), applied by the sandwich product v' = R v R̃. In 3D, rotors are isomorphic to unit quaternions, so there's no performance cost; the GA form maps directly onto how orbital angles are defined.
+**Geometric algebra for orbit geometry.** The orbital plane is represented as the bivector L = r∧v, which carries both the plane's orientation and the angular momentum magnitude. Orbit orientation is a rotor composed of rotations named by the planes they act in (e₁∧e₂ for the equator), applied by the sandwich product v' = R v R̃. The same rotor places the satellites and draws their orbital rings. In 3D, rotors are isomorphic to unit quaternions, so there's no performance cost; the GA form maps directly onto how orbital angles are defined.
 
 **Rigorous time handling.** An `Epoch` stores TT seconds since J2000.0 (sub-microsecond resolution), with conversions from UTC through the full leap-second table (TAI − UTC) and to TDB for planetary ephemerides.
 
@@ -58,7 +62,23 @@ J2 nodal regression, dΩ/dt = −(3/2) n J2 (R⊕/p)² cos i, gives about −6.8
 
 **Physics in kilometers, rendering scaled separately.** All physics runs in km and float64; only a single scene group scales to render units. This keeps the door open for floating-origin rendering at interplanetary distances, where float32 positions would jitter by kilometers.
 
+**Efficient layering.** The catalog is sorted by operator once, so each operator occupies a contiguous slice of a single shared GPU position buffer. Each layer draws only its slice, so toggling and per-operator styling cost nothing per frame.
+
 **Performance baseline.** SGP4 for 15,939 objects takes about 27–37 ms per batch in JavaScript (≈ 1.7–2.3 µs per object) in a Web Worker, while rendering stays near 50–60 fps. These numbers are the baseline for the planned WebGPU port.
+
+## Deployment and data pipeline
+
+The app is a static site, built with Vite and deployed to GitHub Pages by a GitHub Actions workflow (`.github/workflows/deploy.yml`) that runs on every push to `main` and every six hours:
+
+1. **Test:** the full validation suite runs first; a failing test stops the deployment.
+2. **Fetch:** the catalog is downloaded from CelesTrak, once per run for all visitors. Visitors' browsers only load the finished file from GitHub Pages and never contact CelesTrak.
+3. **Build and deploy:** Vite builds the site, including the catalog, and GitHub Pages serves it.
+
+The fetch step is designed to fail safe:
+
+- **All or nothing:** a catalog is only accepted if every operator group downloaded successfully. A partial download is never deployed.
+- **Rate-limit aware:** only server errors and network failures are retried. A 4xx response, such as CelesTrak's rate limit, is final, since retrying would only count as more downloads.
+- **Fallback:** if CelesTrak is unavailable, the workflow redeploys the last good catalog from the live site, so the app keeps working with slightly older data. The HUD always shows the catalog's actual fetch time.
 
 ## Getting started
 
@@ -69,11 +89,13 @@ git clone git@github.com:oliviersci/orbit-lab.git
 cd orbit-lab
 npm install
 npm run fetch-catalog   # downloads the current catalog from CelesTrak into public/data/
-npm run dev             # starts the app at http://localhost:5173
+npm run dev             # starts the app at http://localhost:5173/orbit-lab/
 npm test                # runs the validation suite
+npm run build           # type-checks and builds the production site into dist/
+npm run preview         # serves the production build at http://localhost:4173/orbit-lab/
 ```
 
-The catalog is not committed because it changes daily. Please respect CelesTrak's usage policy and refresh at most every couple of hours.
+The catalog is not committed because it changes constantly. CelesTrak updates its data about every two hours and rate-limits repeated downloads, so avoid fetching more often than that.
 
 ### Controls
 
@@ -83,7 +105,10 @@ The catalog is not committed because it changes daily. Please respect CelesTrak'
 | `Space` | Pause / resume |
 | `]` / `[` | Double / halve time warp |
 | `r` | Reset to current time, 1× speed |
-| `m` | Show / hide simulated meoSphere |
+| `1` – `5` | Toggle SES, Starlink, OneWeb, Amazon Leo, other active |
+| `m` | Toggle simulated meoSphere |
+
+When the app is embedded in another page, click the view first so it receives keyboard input.
 
 ## Project structure
 
@@ -105,14 +130,19 @@ src/
     constellation.ts   Simulated constellation layer with orbital-plane rings
   catalog/
     types.ts           Catalog types, operator colors
-  main.ts              Scene, clock, HUD
+  main.ts              Scene, operator layers, clock, HUD
 scripts/
-  fetch-catalog.ts     CelesTrak download, de-duplicated by operator
+  fetch-catalog.ts     CelesTrak download: operator classification, fail-safe fallback
   diag-case.ts         Per-row diagnostics for SGP4 verification cases
 test/
   sgp4/                SGP4 verification against AIAA 2006-6753
   orbit/               Rotor and J2 propagator tests
   fixtures/sgp4/       Pinned reference data with SHA-256 checksums
+.github/workflows/
+  deploy.yml           Test, fetch, build and deploy; scheduled every 6 hours
+docs/
+  screenshot.png       README screenshot
+vite.config.ts         Base path for GitHub Pages, ES-module workers
 ```
 
 ## Assumptions and limitations
@@ -129,7 +159,9 @@ test/
 - [x] SGP4 validation harness against AIAA 2006-6753
 - [x] Geometric algebra core and J2 secular propagator
 - [x] Simulated meoSphere phase 1 layer
-- [ ] Per-operator visibility toggles, satellite selection and info panel
+- [x] Per-operator layers with toggles; catalog age in the HUD
+- [x] Automated testing and deployment with a fail-safe data pipeline
+- [ ] Satellite selection and info panel (name, orbit, element age)
 - [ ] Python / Orekit comparison: J2 secular model against full numerical propagation
 - [ ] Own SGP4 implementation, validated with the existing harness, including both operating modes to confirm case 23599
 - [ ] WebGPU compute port of SGP4, with float32 precision error quantified against float64
