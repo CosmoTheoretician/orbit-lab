@@ -14,6 +14,8 @@ export interface VerificationCase {
   line1: string;
   line2: string;
   rows: ReferenceRow[];
+  /** Malformed reference lines skipped in this block (reported, never silently dropped). */
+  skipped: number;
 }
 
 /**
@@ -49,20 +51,27 @@ export function loadVerification(dir: string): VerificationCase[] {
 
       const n = (seen.get(satnum) ?? 0) + 1;
       seen.set(satnum, n);
-      current = { id: n > 1 ? `${satnum}#${n}` : String(satnum), satnum, line1, line2, rows: [] };
+      current = { id: n > 1 ? `${satnum}#${n}` : String(satnum), satnum, line1, line2, rows: [], skipped: 0 };
       cases.push(current);
       continue;
     }
     if (!current) continue;
 
-    // rows may carry extra columns (osculating elements, date); only the first 7 are the state
-    const nums = raw.trim().split(/\s+/).slice(0, 7).map(Number);
-    if (nums.length === 7 && nums.every(Number.isFinite)) {
-      current.rows.push({
-        tsince: nums[0],
-        r: [nums[1], nums[2], nums[3]],
-        v: [nums[4], nums[5], nums[6]],
-      });
+    const tokens = raw.trim().split(/\s+/);
+    if (tokens.length < 7) continue;
+    const nums = tokens.map(Number);
+
+    // More than 7 tokens, all numeric: several states concatenated on one line
+    // (a formatting artifact in the reference output). Not reliably attributable, so skip it.
+    if (tokens.length > 7 && nums.every(Number.isFinite)) {
+      current.skipped++;
+      continue;
+    }
+
+    // Normal row: the state, optionally followed by osculating elements and a date
+    const s = nums.slice(0, 7);
+    if (s.every(Number.isFinite)) {
+      current.rows.push({ tsince: s[0], r: [s[1], s[2], s[3]], v: [s[4], s[5], s[6]] });
     }
   }
   return cases;

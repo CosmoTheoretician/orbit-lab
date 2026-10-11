@@ -35,7 +35,7 @@ const VEL_TOL_UM_S = (Math.sqrt(3) / 2) * 1e-9 * 1e9 * 1.01; // ≈ 0.87 µm/s
 const EXPECTED_ERRORS = new Set(["33334"]);
 
 /** Known discrepancies: reported in the table, excluded from pass/fail until explained. */
-const UNDER_INVESTIGATION = new Set(["23599", "20413#2"]);
+const UNDER_INVESTIGATION = new Set(["23599"]);
 
 const dist = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const cases = loadVerification("test/fixtures/sgp4");
@@ -69,6 +69,7 @@ describe.each(CANDIDATES)("SGP4 verification: $name", (candidate) => {
         "max |Δr| [mm]": +drMm.toFixed(4),
         "max |Δv| [µm/s]": +dvUm.toFixed(3),
         missing,
+        skipped: c.skipped,
         status,
       };
     });
