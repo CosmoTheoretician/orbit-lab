@@ -185,4 +185,4 @@ python scripts/fetch_textures.py             # planet textures (Python venv, see
 
 ## Author
 
-Built by [@oliviersci](https://github.com/oliviersci), physics student.
+Built by [@CosmoTheoretician](https://github.com/CosmoTheoretician), physics student.
