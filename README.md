@@ -4,7 +4,7 @@
 
 **A browser-based orbital mechanics and flight dynamics sandbox: the live satellite catalog with a validated SGP4 pipeline, a simulated model of SES's meoSphere constellation, the whole solar system with real ephemerides, lunar missions from tracking data and from own reconstructions, a ground-station planner for SES HQ Betzdorf, and a relay-coverage analysis of lunar communication constellations.**
 
-> **Live demo:** [oliviersci.github.io/orbit-lab](https://oliviersci.github.io/orbit-lab/)
+> **Live demo:** [x]()
 
 ![Orbit Lab](docs/screenshot.png)
 
