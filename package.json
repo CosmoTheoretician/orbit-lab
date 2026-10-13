@@ -13,7 +13,9 @@
     "fetch-missions": "tsx scripts/fetch-missions.ts",
     "reconstruct-missions": "tsx scripts/reconstruct-missions.ts",
     "fetch-orbiters": "tsx scripts/fetch-orbiters.ts",
-    "relay-coverage": "tsx scripts/relay-coverage.ts"
+    "relay-coverage": "tsx scripts/relay-coverage.ts",
+    "low-energy": "tsx scripts/low-energy.ts",
+    "low-energy-2": "tsx scripts/low-energy-2.ts"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",

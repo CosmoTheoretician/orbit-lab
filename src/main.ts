@@ -214,6 +214,7 @@ const stationPanel = createStationPanel(world); // live pointing and Doppler fro
 const missions = createMissions({
   world,
   moon: solar.moon,
+  moonKm: solar.km.moon,
   camera,
   base: BASE,
   onSelect: (m) => stationPanel.setMission(m),

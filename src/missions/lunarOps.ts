@@ -164,5 +164,5 @@ export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number) {
     impactSpeedMs: hFF > 0 ? Math.round(G_M * tFall * 1000) : "n/a (descent modeled to scheduled touchdown)",
     impact: iso(tLand),
   };
-  return { samples, report, at, times: { tLoi, tCirc, tDoi, tPdi, tEnd, tLand }, siteDir: sHat };
+  return { samples, report, at, times: { tLoi, tCirc, tDoi, tPdi, tEnd, tLand }, siteDir: sHat, normal };
 }
