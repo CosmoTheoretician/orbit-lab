@@ -34,13 +34,20 @@ function trueAnomaly(M: number, e: number): number {
   return 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2));
 }
 
+export interface LunarOpsOptions {
+  /** Insertion point (Moon-centred unit vector in the orbit plane), e.g. from a reconstructed transfer. */
+  loiDir?: Vec3;
+}
+
 /**
  * Lunar operations from orbit insertion to touchdown or impact, Moon-centred, scene axes, km:
  * capture ellipse at LOI → gradual lowering to the circular orbit → circular orbit →
  * descent orbit (DOI at the published landing-sequence start) → powered descent →
  * optionally a free fall from the altitude where propellant ran out.
+ * With `loiDir`, the capture orbit starts at that point, and the circular phase runs a whole number
+ * of revolutions at an adjusted rate to still reach the descent point (reported as an implied altitude).
  */
-export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number) {
+export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number, opts: LunarOpsOptions = {}) {
   const tLoi = tt(spec.loi);
   const tCirc = tt(spec.circularBy);
   const tLand = tt(spec.landing);
@@ -86,13 +93,13 @@ export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number) {
   const pHat = rot(sHat, -phi);
   const k = Math.max(0, Math.round((tPdi - tt(spec.descentStart)) / TE - 0.5));
   const tDoi = tPdi - (k + 0.5) * TE;
-  const aHat = scale(pHat, -1);
+  const aHat = scale(pHat, -1); // DOI point
+  const perp = rot(aHat, Math.PI / 2); // in plane, 90° ahead of the DOI point
   const wC = Math.sqrt(MU_M / rc ** 3);
   if (!(tLoi < tCirc && tCirc < tDoi)) throw new Error("expected LOI < circularBy < descent start");
 
   // Orbit lowering: perilune and apolune altitudes change linearly from capture to circular;
-  // mean anomaly is integrated so the motion stays continuous, and the argument of perilune is
-  // chosen so the lowering ends exactly on the circular orbit's position at `circularBy`.
+  // mean anomaly is integrated so the motion stays continuous.
   const STEP = 60;
   const lowT: number[] = [];
   const lowM: number[] = [];
@@ -115,7 +122,24 @@ export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number) {
     const f = (t - lowT[i]) / STEP;
     return lowM[i] + f * (lowM[i + 1] - lowM[i]);
   };
-  const omega = wC * (tCirc - tDoi) - meanAnomaly(tCirc); // at tCirc, e = 0 and ν = M
+  const mC = meanAnomaly(tCirc); // at tCirc, e = 0 and ν = M
+
+  // Argument of perilune (angle from the DOI point, in the direction of motion) and circular phase
+  let omega: number;
+  let wEff = wC;
+  let circAngle: (t: number) => number;
+  if (opts.loiDir) {
+    const d = unit(opts.loiDir);
+    omega = Math.atan2(dot(d, perp), dot(d, aHat));
+    const alphaC = (((omega + mC) % TWO_PI) + TWO_PI) % TWO_PI;
+    const span = tDoi - tCirc;
+    const revs = Math.max(1, Math.round((wC * span + alphaC) / TWO_PI));
+    wEff = (TWO_PI * revs - alphaC) / span;
+    circAngle = (t) => alphaC + wEff * (t - tCirc);
+  } else {
+    omega = wC * (tCirc - tDoi) - mC;
+    circAngle = (t) => wC * (t - tDoi);
+  }
 
   function at(t: number): Vec3 {
     if (t >= tEnd) {
@@ -132,7 +156,7 @@ export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number) {
       const nu = 2 * Math.atan2(Math.sqrt(1 + eE) * Math.sin(E / 2), Math.sqrt(1 - eE) * Math.cos(E / 2));
       return scale(rot(pHat, nu), aE * (1 - eE * Math.cos(E)));
     }
-    if (t >= tCirc) return scale(rot(aHat, wC * (t - tDoi)), rc);
+    if (t >= tCirc) return scale(rot(aHat, circAngle(t)), rc);
     const { a, e } = elements(t);
     const Mt = meanAnomaly(t);
     const E = solveKepler(Mt, e);
@@ -147,8 +171,8 @@ export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number) {
   }
   samples.push({ t: tLand, r: geo(tLand), v: moonVelocityAt(tLand) });
 
-  const revs = (meanAnomaly(tCirc) + wC * (tDoi - tCirc)) / TWO_PI + k + 0.5;
-  const report = {
+  const revs = (mC + wEff * (tDoi - tCirc)) / TWO_PI + k + 0.5;
+  const report: Record<string, unknown> = {
     modeledPhase: "lunar operations only (LOI → impact); transfer not reconstructed yet",
     loi: iso(tLoi),
     captureOrbitKm: `${spec.capture.periAltKm} × ${spec.capture.apoAltKm}`,
@@ -164,5 +188,6 @@ export function lunarOps(spec: LunarOpsSpec, latDeg: number, lonDeg: number) {
     impactSpeedMs: hFF > 0 ? Math.round(G_M * tFall * 1000) : "n/a (descent modeled to scheduled touchdown)",
     impact: iso(tLand),
   };
+  if (opts.loiDir) report.impliedCircularOrbitAltKm = +(Math.cbrt(MU_M / (wEff * wEff)) - R_M).toFixed(1);
   return { samples, report, at, times: { tLoi, tCirc, tDoi, tPdi, tEnd, tLand }, siteDir: sHat, normal };
 }

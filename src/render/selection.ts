@@ -62,7 +62,7 @@ export function createSelection(d: SelectionDeps) {
 
   const panel = document.createElement("div");
   Object.assign(panel.style, {
-    position: "fixed", top: "10px", right: "10px", color: "#cfe3ff", font: "12px/1.5 ui-monospace, monospace",
+    position: "fixed", top: "26px", right: "10px", color: "#cfe3ff", font: "12px/1.5 ui-monospace, monospace",
     background: "rgba(0,0,0,.6)", padding: "8px 10px", borderRadius: "6px", whiteSpace: "pre",
     pointerEvents: "none", display: "none",
   });

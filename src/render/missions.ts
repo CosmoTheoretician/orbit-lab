@@ -56,6 +56,8 @@ const rawTrack = (t: number[], r: number[], v: number[]): Track => ({
 
 const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
 const fmt = (tt: number) => Epoch.fromTT(tt).toDate().toISOString().replace("T", " ").slice(0, 16) + " UTC";
+const day = (tt: number) =>
+  Epoch.fromTT(tt).toDate().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 
 export interface MissionDeps {
   world: THREE.Group;
@@ -67,14 +69,43 @@ export interface MissionDeps {
   setMoonOverride(f: MoonOverride): void;
   /** Set the clock: TT seconds since J2000, and a time warp. */
   jump(tt: number, warp: number): void;
-  view(kind: "earth-moon" | "moon"): void;
+  /** Move the camera; for the Earth–Moon view, an optional distance in render units. */
+  view(kind: "earth-moon" | "moon", distance?: number): void;
   onSelect?(m: Mission): void;
 }
 
 interface Segment {
   start: number;
   len: number;
+  near: boolean;
+  t0: number;
+  t1: number;
+  group: THREE.Group;
   progress: THREE.Line | null;
+  /** For near-Moon segments: where the Moon was where they connect to the geocentric arcs. */
+  anchors: Array<{ t: number; pos: Vec3 }>;
+  /** For near-Moon segments between two geocentric arcs (flybys): the same path geocentric, shown outside its time. */
+  geoGroup: THREE.Group | null;
+  geoProgress: THREE.Line | null;
+  /** Marker for the Moon's position at this segment's date, shown when the segment isn't following the Moon. */
+  ghost: THREE.Points | null;
+  ghostLabel: HTMLDivElement | null;
+}
+
+/** Dim full path plus a bright "flown so far" line sharing the same points; returns the bright one. */
+function addLines(group: THREE.Group, pts: Float32Array, color: number): THREE.Line | null {
+  if (pts.length < 6) return null;
+  const attr = new THREE.BufferAttribute(pts, 3);
+  const fullGeom = new THREE.BufferGeometry();
+  fullGeom.setAttribute("position", attr);
+  const full = new THREE.Line(fullGeom, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.35 }));
+  const progGeom = new THREE.BufferGeometry();
+  progGeom.setAttribute("position", attr);
+  const progress = new THREE.Line(progGeom, new THREE.LineBasicMaterial({ color }));
+  full.frustumCulled = false;
+  progress.frustumCulled = false;
+  group.add(full, progress);
+  return progress;
 }
 
 export function createMissions(d: MissionDeps) {
@@ -108,11 +139,7 @@ export function createMissions(d: MissionDeps) {
   highlight.visible = false;
   d.moon.add(highlight);
 
-  // ---------- trajectory: geocentric part in the world group, near-Moon part in a group that follows the Moon ----------
-  const geoGroup = new THREE.Group();
-  const moonGroup = new THREE.Group();
-  d.world.add(geoGroup, moonGroup);
-
+  // ---------- trajectory: one group per segment (geocentric, or Moon-relative near the Moon) ----------
   let track: Track | null = null;
   let nearFlags: boolean[] = [];
   let trackMoon: ((tt: number) => Vec3) | null = null;
@@ -126,12 +153,23 @@ export function createMissions(d: MissionDeps) {
   craft.visible = false;
   d.world.add(craft);
 
+  const ghostMaterial = new THREE.PointsMaterial({ color: 0x8e8e93, size: 10, sizeAttenuation: false, transparent: true, opacity: 0.75 });
+
+  function removeGroup(g: THREE.Object3D | null) {
+    if (!g) return;
+    d.world.remove(g);
+    g.traverse((o) => {
+      const geom = (o as THREE.Line).geometry as THREE.BufferGeometry | undefined;
+      geom?.dispose();
+    });
+  }
+
   function clearTrack() {
-    for (const g of [geoGroup, moonGroup]) {
-      for (const child of [...g.children]) {
-        g.remove(child);
-        ((child as THREE.Line).geometry as THREE.BufferGeometry).dispose();
-      }
+    for (const seg of segments) {
+      removeGroup(seg.group);
+      removeGroup(seg.geoGroup);
+      removeGroup(seg.ghost);
+      seg.ghostLabel?.remove();
     }
     track = null;
     nearFlags = [];
@@ -141,13 +179,14 @@ export function createMissions(d: MissionDeps) {
     d.setMoonOverride(null);
   }
 
-  /** Draws a trajectory, splitting it into geocentric and Moon-relative segments. Returns whether it starts near the Moon. */
-  function showTrack(m: Mission, tr: Track, moonFn: (tt: number) => Vec3): boolean {
+  /** Draws a trajectory as alternating geocentric and Moon-relative segments. */
+  function showTrack(m: Mission, tr: Track, moonFn: (tt: number) => Vec3) {
     const color = OUTCOME[m.outcome].color;
     const n = tr.t.length;
     const geo = new Float32Array(tr.r); // float32 is ~0.03 km precise at lunar distance
     const rel = new Float32Array(3 * n);
     const near: boolean[] = new Array(n);
+    let maxGeoKm = 0;
     for (let i = 0; i < n; i++) {
       const mp = moonFn(tr.t[i]);
       const dx = tr.r[3 * i] - mp[0];
@@ -155,49 +194,84 @@ export function createMissions(d: MissionDeps) {
       const dz = tr.r[3 * i + 2] - mp[2];
       rel.set([dx, dy, dz], 3 * i);
       near[i] = Math.hypot(dx, dy, dz) < NEAR_MOON_KM;
+      maxGeoKm = Math.max(maxGeoKm, Math.hypot(tr.r[3 * i], tr.r[3 * i + 1], tr.r[3 * i + 2]));
     }
 
-    const addSegment = (start: number, len: number) => {
-      const isNear = near[start];
-      const group = isNear ? moonGroup : geoGroup;
-      const pts = (isNear ? rel : geo).slice(3 * start, 3 * (start + len));
-      const seg: Segment = { start, len, progress: null };
-      if (len >= 2) {
-        const attr = new THREE.BufferAttribute(pts, 3);
-        const fullGeom = new THREE.BufferGeometry();
-        fullGeom.setAttribute("position", attr);
-        const full = new THREE.Line(fullGeom, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.35 }));
-        const progGeom = new THREE.BufferGeometry();
-        progGeom.setAttribute("position", attr);
-        const progress = new THREE.Line(progGeom, new THREE.LineBasicMaterial({ color }));
-        full.frustumCulled = false;
-        progress.frustumCulled = false;
-        group.add(full, progress);
-        seg.progress = progress;
-      }
-      segments.push(seg);
-    };
-
+    const spans: Array<{ start: number; len: number }> = [];
     let s = 0;
     for (let i = 1; i <= n; i++) {
       if (i === n || near[i] !== near[s]) {
-        addSegment(s, i - s);
+        spans.push({ start: s, len: i - s });
         s = i;
       }
     }
 
-    // End marker in the frame of the last sample
+    spans.forEach(({ start, len }, idx) => {
+      const isNear = near[start];
+      const end = start + len;
+      const group = new THREE.Group();
+      d.world.add(group);
+      const progress = addLines(group, (isNear ? rel : geo).slice(3 * start, 3 * end), color);
+
+      const anchors: Array<{ t: number; pos: Vec3 }> = [];
+      if (isNear && idx > 0) anchors.push({ t: tr.t[start], pos: moonFn(tr.t[start]) });
+      if (isNear && idx < spans.length - 1) anchors.push({ t: tr.t[end - 1], pos: moonFn(tr.t[end - 1]) });
+
+      let geoGroup: THREE.Group | null = null;
+      let geoProgress: THREE.Line | null = null;
+      let ghost: THREE.Points | null = null;
+      let ghostLabel: HTMLDivElement | null = null;
+      if (anchors.length > 0) {
+        // Flyby: geocentric copy, and the ghost Moon at closest approach. Arrival: ghost where it connects.
+        let tGhost = anchors[0].t;
+        if (anchors.length === 2) {
+          geoGroup = new THREE.Group();
+          geoGroup.visible = false;
+          d.world.add(geoGroup);
+          geoProgress = addLines(geoGroup, geo.slice(3 * start, 3 * end), color);
+          let best = Infinity;
+          for (let i = start; i < end; i++) {
+            const dist = Math.hypot(rel[3 * i], rel[3 * i + 1], rel[3 * i + 2]);
+            if (dist < best) {
+              best = dist;
+              tGhost = tr.t[i];
+            }
+          }
+        }
+        const gGeom = new THREE.BufferGeometry();
+        gGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3), 3));
+        ghost = new THREE.Points(gGeom, ghostMaterial);
+        ghost.frustumCulled = false;
+        ghost.visible = false;
+        const gp = moonFn(tGhost);
+        ghost.position.set(gp[0], gp[1], gp[2]);
+        d.world.add(ghost);
+        ghostLabel = document.createElement("div");
+        ghostLabel.textContent = `Moon · ${day(tGhost)}`;
+        Object.assign(ghostLabel.style, {
+          position: "fixed", color: "#8fa6c4", font: "11px ui-monospace, monospace",
+          pointerEvents: "none", display: "none", transform: "translate(8px, -50%)",
+        });
+        document.body.appendChild(ghostLabel);
+      }
+      segments.push({
+        start, len, near: isNear, t0: tr.t[start], t1: tr.t[end - 1],
+        group, progress, anchors, geoGroup, geoProgress, ghost, ghostLabel,
+      });
+    });
+
+    // End marker, in the group of the last segment
     const last = n - 1;
     const endGeom = new THREE.BufferGeometry();
     endGeom.setAttribute("position", new THREE.BufferAttribute((near[last] ? rel : geo).slice(3 * last, 3 * last + 3), 3));
-    const end = new THREE.Points(endGeom, new THREE.PointsMaterial({ color, size: 10, sizeAttenuation: false }));
-    end.frustumCulled = false;
-    (near[last] ? moonGroup : geoGroup).add(end);
+    const endMark = new THREE.Points(endGeom, new THREE.PointsMaterial({ color, size: 10, sizeAttenuation: false }));
+    endMark.frustumCulled = false;
+    segments[segments.length - 1].group.add(endMark);
 
     track = tr;
     nearFlags = near;
     trackMoon = moonFn;
-    return near[0];
+    return { startsNearMoon: near[0], hasGeo: near.some((x) => !x), maxGeoKm };
   }
 
   // ---------- panel ----------
@@ -230,6 +304,7 @@ export function createMissions(d: MissionDeps) {
   });
 
   let selected: Mission | null = null;
+  let startCurrent: (() => void) | null = null;
 
   function renderList() {
     list.innerHTML = "";
@@ -270,6 +345,23 @@ export function createMissions(d: MissionDeps) {
       `<div style="margin-top:4px">${m.timeline.map((e) => `<div>${e.date} · ${e.text}</div>`).join("")}</div>` +
       `<div style="margin-top:6px;color:#8fa6c4">${status}</div>` +
       `<div id="mission-buttons" style="margin-top:6px;display:flex;gap:6px"></div>`;
+    addShare(m);
+  }
+
+  function addShare(m: Mission) {
+    const link = document.createElement("div");
+    link.textContent = "🔗 Copy link to this mission";
+    Object.assign(link.style, { marginTop: "6px", color: "#64d2ff", cursor: "pointer" });
+    link.onclick = async () => {
+      const url = `${location.origin}${location.pathname}?mission=${m.id}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        link.textContent = "✓ Link copied";
+      } catch {
+        link.textContent = url;
+      }
+    };
+    details.appendChild(link);
   }
 
   function addButton(label: string, onClick: () => void) {
@@ -288,6 +380,8 @@ export function createMissions(d: MissionDeps) {
     d.onSelect?.(m);
     renderList();
     clearTrack();
+    startCurrent = null;
+    history.replaceState(null, "", `?mission=${m.id}`);
     timeHint.textContent = "";
 
     if (m.site) {
@@ -330,7 +424,7 @@ export function createMissions(d: MissionDeps) {
       const analytic = moonFn;
       moonFn = (tt) => sampleTrack(moonTrack, tt, [0, 0, 0]) ?? analytic(tt);
     }
-    const startsNearMoon = showTrack(m, tr, moonFn);
+    const { startsNearMoon, hasGeo, maxGeoKm } = showTrack(m, tr, moonFn);
     const t0 = tr.t[0];
     const t1 = tr.t[tr.t.length - 1];
 
@@ -342,10 +436,15 @@ export function createMissions(d: MissionDeps) {
       : "";
     renderDetails(m, `${kind}<div>${fmt(t0)} → ${fmt(t1)} · ${tr.t.length} states</div>${rows}`);
 
-    addButton(startsNearMoon ? "▶ From LOI" : "▶ From launch", () => {
-      d.jump(t0, startsNearMoon ? 512 : 4096);
-      d.view(startsNearMoon ? "moon" : "earth-moon");
-    });
+    // Earth–Moon view sized to the whole trajectory (render units: 1 = 1000 km)
+    const viewDistance = Math.max(750, maxGeoKm * 1e-3 * 2.2);
+    const start = () => {
+      d.jump(t0, hasGeo ? 4096 : 512);
+      if (hasGeo) d.view("earth-moon", viewDistance);
+      else d.view("moon");
+    };
+    startCurrent = start;
+    addButton(!hasGeo ? "▶ From LOI" : startsNearMoon ? "▶ From flyby" : "▶ From launch", start);
     addButton("◎ Arrival", () => {
       d.jump(Math.max(t0, t1 - 3 * 3600), 32);
       d.view("moon");
@@ -354,16 +453,69 @@ export function createMissions(d: MissionDeps) {
 
   renderList();
   const tmp: Vec3 = [0, 0, 0];
+  const proj = new THREE.Vector3();
+
+  function placeLabel(seg: Segment) {
+    if (!seg.ghost || !seg.ghostLabel) return;
+    if (!seg.ghost.visible) {
+      seg.ghostLabel.style.display = "none";
+      return;
+    }
+    seg.ghost.getWorldPosition(proj).project(d.camera);
+    if (proj.z > 1 || Math.abs(proj.x) > 1.1 || Math.abs(proj.y) > 1.1) {
+      seg.ghostLabel.style.display = "none";
+      return;
+    }
+    seg.ghostLabel.style.display = "block";
+    seg.ghostLabel.style.left = `${((proj.x + 1) / 2) * innerWidth}px`;
+    seg.ghostLabel.style.top = `${((1 - proj.y) / 2) * innerHeight}px`;
+  }
+
+  /** Places all ghost-Moon labels, nudging them apart vertically when they would overlap. */
+  function layoutLabels() {
+    const shown: Array<{ el: HTMLDivElement; x: number; y: number }> = [];
+    for (const seg of segments) {
+      placeLabel(seg);
+      const el = seg.ghostLabel;
+      if (el && el.style.display === "block") shown.push({ el, x: parseFloat(el.style.left), y: parseFloat(el.style.top) });
+    }
+    shown.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < shown.length; i++) {
+      for (let j = 0; j < i; j++) {
+        if (Math.abs(shown[i].x - shown[j].x) < 160 && shown[i].y - shown[j].y < 14) shown[i].y = shown[j].y + 14;
+      }
+      shown[i].el.style.top = `${shown[i].y}px`;
+    }
+  }
 
   function update(epoch: Epoch) {
-    moonGroup.position.copy(d.moonKm); // Moon-relative segments travel with the rendered Moon
     if (!track) return;
     const t = epoch.tt;
-    const t0 = track.t[0];
-    const t1 = track.t[track.t.length - 1];
+
+    // Near-Moon segments follow the Moon while the displayed time is inside them. Outside it, flybys are
+    // shown geocentric (joining both neighbouring arcs), and arrivals sit where the Moon was when they connect.
+    for (const seg of segments) {
+      if (!seg.near) continue;
+      const anchored = seg.anchors.length > 0 && (t < seg.t0 || t > seg.t1);
+      if (seg.geoGroup) {
+        seg.group.visible = !anchored;
+        seg.geoGroup.visible = anchored;
+        seg.group.position.copy(d.moonKm);
+      } else if (anchored) {
+        const a = seg.anchors.reduce((p, q) => (Math.abs(q.t - t) < Math.abs(p.t - t) ? q : p));
+        seg.group.position.set(a.pos[0], a.pos[1], a.pos[2]);
+      } else {
+        seg.group.position.copy(d.moonKm);
+      }
+      if (seg.ghost) seg.ghost.visible = anchored;
+    }
+    layoutLabels();
+
     const k = indexAt(track, t);
     for (const seg of segments) {
-      seg.progress?.geometry.setDrawRange(0, Math.min(seg.len, Math.max(0, k - seg.start + 1)));
+      const count = Math.min(seg.len, Math.max(0, k - seg.start + 1));
+      seg.progress?.geometry.setDrawRange(0, count);
+      seg.geoProgress?.geometry.setDrawRange(0, count);
     }
 
     const p = sampleTrack(track, t, tmp);
@@ -378,13 +530,23 @@ export function createMissions(d: MissionDeps) {
       craftAttr.needsUpdate = true;
     }
 
+    const t0 = track.t[0];
+    const t1 = track.t[track.t.length - 1];
     timeHint.textContent =
-      t < t0
-        ? "Shown time is before this trajectory: press ▶ to start it."
-        : t > t1
-          ? "Shown time is after this trajectory (full path shown dim)."
-          : "";
+      t < t0 ? "Shown time is before this trajectory: press ▶ to start it." : t > t1 ? "Shown time is after this trajectory (full path shown dim)." : "";
   }
 
-  return { update };
+  /** Deep link: ?mission=<id> opens the panel, selects the mission and starts it; &play=0 only selects it. */
+  async function openFromUrl() {
+    const params = new URLSearchParams(location.search);
+    const m = MISSIONS.find((x) => x.id === params.get("mission"));
+    if (!m) return;
+    panel.style.display = "block";
+    await select(m);
+    if (params.get("play") === "0") return;
+    if (startCurrent) startCurrent();
+    else if (m.site) d.view("moon");
+  }
+
+  return { update, openFromUrl };
 }

@@ -10,6 +10,7 @@ import { createSolarSystem } from "./render/solarSystem";
 import { createMissions, OUTCOME } from "./render/missions";
 import { createStationPanel } from "./render/stationPanel";
 import { createLunarOrbiters } from "./render/lunarOrbiters";
+import { createDevBadge } from "./render/devBadge";
 import { createConstellationLayer, MEOSPHERE_COLOR } from "./render/constellation";
 import { createSelection } from "./render/selection";
 import { createCatalogSource } from "./render/catalogSource";
@@ -224,9 +225,9 @@ const missions = createMissions({
     warp = w;
     paused = false;
   },
-  view: (kind) => {
+  view: (kind, distance) => {
     if (kind === "moon") setFocus(FOCUS_ORDER.indexOf("moon"), 6);
-    else setFocus(FOCUS_ORDER.indexOf("earth"), 750); // whole Earth–Moon system
+    else setFocus(FOCUS_ORDER.indexOf("earth"), distance ?? 750); // whole Earth–Moon system, or wider
   },
 });
 
@@ -313,6 +314,7 @@ Object.assign(credits.style, {
 credits.textContent =
   "Planet textures: Solar System Scope (CC BY 4.0) · Milky Way: NASA/GSFC SVS · Stars: Yale BSC · Trajectories: JPL Horizons";
 document.body.appendChild(credits);
+createDevBadge();
 
 let fps = 60;
 let lastHud = 0;
@@ -367,3 +369,4 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+void missions.openFromUrl();

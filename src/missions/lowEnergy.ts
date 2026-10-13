@@ -361,3 +361,13 @@ export function reconstructLowEnergy(spec: LowEnergySpec, log: (s: string) => vo
   };
   return { report, post, pre: pre.reverse(), x };
 }
+
+/** Unit perilune direction at LOI for phase theta in the plane with the given normal (same basis as the solver). */
+export function arrivalDirection(normal: Vec3, theta: number): Vec3 {
+  const n = unit(normal);
+  let e1 = cross(n, [0, 0, 1]);
+  if (norm(e1) < 1e-6) e1 = cross(n, [1, 0, 0]);
+  e1 = unit(e1);
+  const e2 = cross(n, e1);
+  return add(scale(e1, Math.cos(theta)), scale(e2, Math.sin(theta)));
+}

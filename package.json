@@ -15,7 +15,10 @@
     "fetch-orbiters": "tsx scripts/fetch-orbiters.ts",
     "relay-coverage": "tsx scripts/relay-coverage.ts",
     "low-energy": "tsx scripts/low-energy.ts",
-    "low-energy-2": "tsx scripts/low-energy-2.ts"
+    "low-energy-2": "tsx scripts/low-energy-2.ts",
+    "departure": "tsx scripts/departure.ts",
+    "joint": "tsx scripts/joint.ts",
+    "global": "tsx scripts/global.ts"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
