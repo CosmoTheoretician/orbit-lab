@@ -11,6 +11,8 @@ import type { MoonOverride } from "./solarSystem";
 const DEG = Math.PI / 180;
 /** Within this distance of the Moon (roughly its sphere of influence), trajectories are drawn Moon-relative. */
 const NEAR_MOON_KM = 60_000;
+/** Mission playback starts at the maximum time warp. */
+const MAX_WARP = 65536;
 
 /** Mission phases shown under the title (for Resilience, ispace's own names from its Mission 2 graphic). */
 const PHASES: Record<string, Array<{ from: string; name: string }>> = {
@@ -473,6 +475,7 @@ export function createMissions(d: MissionDeps) {
     timeHint.textContent = "";
     history.replaceState(null, "", location.pathname);
     showTab(false);
+    closeValidation();
     d.onExit?.();
   }
   back.onclick = closeMission;
@@ -542,7 +545,7 @@ export function createMissions(d: MissionDeps) {
     // Earth–Moon view sized to the whole trajectory (render units: 1 = 1000 km)
     const viewDistance = Math.max(750, maxGeoKm * 1e-3 * 2.2);
     const start = () => {
-      d.jump(t0, hasGeo ? 4096 : 512);
+      d.jump(t0, MAX_WARP);
       if (hasGeo) d.view("earth-moon", viewDistance);
       else d.view("moon");
     };
@@ -552,6 +555,155 @@ export function createMissions(d: MissionDeps) {
       d.jump(Math.max(t0, t1 - 3 * 3600), 32);
       d.view("moon");
     });
+    if (VALIDATION[m.id]) addButton("📈 Doppler validation", () => openValidation(m.id));
+  }
+
+  // ---------- validation page: a full-screen story with large plots and the reconstructed sequence ----------
+  interface Validation {
+    title: string;
+    summary: string;
+    steps: Array<{ file: string; title: string; text: string }>;
+    sequence: Array<[string, string, string]>;
+    open: string[];
+    credit: string;
+  }
+  const VALIDATION: Record<string, Validation> = {
+    resilience: {
+      title: "Resilience's last two hours, reconstructed from a radio telescope",
+      summary:
+        "On 5 June 2025 the Dwingeloo Radio Telescope recorded Resilience's radio signal until the crash. From that recording alone, " +
+        "this page reconstructs when the lander went behind the Moon, when it fired its engine, when the ground station's uplink locked, " +
+        "and where and when it hit the surface, and checks the result against ispace's own published telemetry.",
+      steps: [
+        {
+          file: "01-data.png",
+          title: "The data",
+          text:
+            "The received frequency shifts with the lander's speed toward or away from the telescope (the Doppler effect): " +
+            "at X-band, 1 m/s shifts it by about 28 Hz. The signal disappears for 47 minutes while Resilience is behind the Moon, " +
+            "and ends at 19:15:33 UTC.",
+        },
+        {
+          file: "02-before.png",
+          title: "The first comparison fails",
+          text:
+            "A model built only from ispace's published milestones misses by more than 200 m/s. Its orbit timing is off, and after 18:30 " +
+            "the frequency changes in a way no motion of the lander can explain.",
+        },
+        {
+          file: "03-two-way.png",
+          title: "The clue: a radio link, not a burn",
+          text:
+            "When a lander locks its transmitter to an uplink from a ground station, the received frequency also carries that station's Doppler shift. " +
+            "Testing every candidate station: before 18:30 a one-way link fits best, after 18:32 any visible European or Atlantic station fits about 80 times better. " +
+            "The uplink locked at about 18:31. Which station it was can't be told from this data.",
+        },
+        {
+          file: "04-final-fit.png",
+          title: "The reconstruction",
+          text:
+            "With the link modeled correctly, the last two hours are fitted: orbit, deorbit burn, coast, braking burn and final phase, ending at the impact " +
+            "crater photographed by NASA's LRO. ispace's published braking altitude and last telemetry are used as soft constraints. " +
+            "The result follows the measurement within about 10 m/s.",
+        },
+        {
+          file: "05-residuals.png",
+          title: "How good it is",
+          text:
+            "During orbit and coast the reconstruction is within about 5 m/s of the data. The braking phase fits less well, mostly in the last minute, " +
+            "where the signal's reflection off the lunar surface interferes with the measurement.",
+        },
+        {
+          file: "06-descent.png",
+          title: "What happened",
+          text:
+            "Resilience coasted down to about 26 km, started its main-engine braking at about 19:03:30, switched to a harder final phase near 19:10, " +
+            "and hit the surface at 19:15:34, 1.5 km from the crater — consistent with ispace's account of a descent that did not slow down enough.",
+        },
+      ],
+      sequence: [
+        ["17:31–18:18", "Behind the Moon, no signal", "Dwingeloo"],
+        ["18:18", "Signal reappears, one-way link", "Dwingeloo"],
+        ["~18:20", "Deorbit burn, ~14 m/s", "fit"],
+        ["~18:31", "Uplink locks, link goes two-way", "two-way test"],
+        ["18:20–19:03", "Coast down to ~26 km", "fit"],
+        ["~19:03:30", "Main engine starts braking, ~2.3 m/s²", "fit"],
+        ["~19:10", "Harder final phase, ~4.7 m/s²", "fit (±1 min)"],
+        ["19:15:27", "221 m at 30 m/s (ispace: 192 m at 42 m/s)", "fit vs telemetry"],
+        ["19:15:33", "Loss of signal", "Dwingeloo"],
+        ["19:15:34", "Impact 1.5 km from the LRO crater", "fit"],
+      ],
+      open: [
+        "Braking altitude: 29 km in the fit vs ispace's ~20 km. One station constrains altitude only weakly, and the model uses a point-mass Moon.",
+        "Orbit inclination: 88° in the fit vs 104° estimated by Scott Tilley a month earlier.",
+        "Pitch angles and the exact start of the final phase are not determined by one line of sight.",
+      ],
+      credit:
+        "Data: Dwingeloo Radio Telescope, CAMRAS (data.camras.nl/hakuto-r). Impact site: NASA LRO/LROC. Descent figures: ispace. Analysis and plots: this project.",
+    },
+  };
+
+  const overlay = document.createElement("div");
+  Object.assign(overlay.style, {
+    position: "fixed", inset: "0", background: "#05080c", color: "#d6e4f7",
+    font: "14px/1.6 ui-monospace, monospace", overflowY: "auto", display: "none", zIndex: "50", padding: "20px 28px 40px",
+  });
+  document.body.appendChild(overlay);
+  function closeValidation() {
+    overlay.style.display = "none";
+  }
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay.style.display !== "none") closeValidation();
+  });
+  function openValidation(id: string) {
+    const v = VALIDATION[id];
+    if (!v) return;
+    const card = "background:#0b0f14;border:1px solid #1c2836;border-radius:8px;padding:14px 16px";
+    const rows = v.sequence
+      .map(([t, e, s]) => `<tr><td style="white-space:nowrap;padding:3px 12px 3px 0;color:#fff;vertical-align:top">${t}</td><td style="padding:3px 12px 3px 0">${e}</td><td style="color:#7f93ad;white-space:nowrap">${s}</td></tr>`)
+      .join("");
+    const steps = v.steps
+      .map(
+        (s, i) =>
+          `<section style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-top:28px">` +
+          `<img src="${d.base}validation/${s.file}" alt="${s.title}" style="flex:3 1 640px;max-width:1100px;width:100%;border:1px solid #1c2836;border-radius:8px">` +
+          `<div style="flex:1 1 300px;max-width:520px"><div style="color:#64d2ff;font-size:12px">STEP ${i + 1}</div>` +
+          `<div style="color:#fff;font-size:18px;margin:2px 0 8px">${s.title}</div><div>${s.text}</div></div></section>`,
+      )
+      .join("");
+    overlay.innerHTML =
+      `<div style="display:flex;align-items:baseline;gap:16px;flex-wrap:wrap">` +
+      `<div style="font-size:22px;color:#fff">${v.title}</div>` +
+      `<div id="val-copy" style="color:#64d2ff;cursor:pointer">🔗 Copy link</div><div style="flex:1"></div>` +
+      `<button id="val-close" style="font:13px ui-monospace,monospace;color:#d6e4f7;background:#1c2836;border:1px solid #3a4a60;border-radius:4px;padding:4px 12px;cursor:pointer">✕ Close [esc]</button></div>` +
+      `<div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:16px;align-items:flex-start">` +
+      `<div style="flex:3 1 520px;max-width:900px;font-size:15px">${v.summary}</div>` +
+      `<div style="flex:2 1 420px;max-width:620px;${card}"><div style="color:#fff;margin-bottom:6px">Reconstructed sequence (UTC, 5 June 2025)</div>` +
+      `<table style="border-collapse:collapse">${rows}</table></div></div>` +
+      steps +
+      `<div style="margin-top:32px;max-width:1100px;${card}"><div style="color:#fff;margin-bottom:6px">Open questions</div>` +
+      `${v.open.map((o) => `<div style="margin-top:4px">• ${o}</div>`).join("")}` +
+      `<div style="margin-top:12px;color:#7f93ad">${v.credit}</div></div>`;
+    overlay.style.display = "block";
+    overlay.scrollTop = 0;
+    overlay.querySelector<HTMLButtonElement>("#val-close")!.onclick = closeValidation;
+    const copy = overlay.querySelector<HTMLDivElement>("#val-copy")!;
+    copy.onclick = async () => {
+      const url = `${location.origin}${location.pathname}?mission=${id}&tab=validation`;
+      try {
+        await navigator.clipboard.writeText(url);
+        copy.textContent = "✓ Link copied";
+      } catch {
+        copy.textContent = url;
+      }
+    };
+  }
+
+  /** Render-space position of the spacecraft while a mission is open and the craft is visible. */
+  function followTarget(out: THREE.Vector3): boolean {
+    if (!selected || !craft.visible) return false;
+    out.fromBufferAttribute(craftAttr, 0).applyMatrix4(d.world.matrixWorld);
+    return true;
   }
 
   renderList();
@@ -654,10 +806,11 @@ export function createMissions(d: MissionDeps) {
     if (!m) return;
     panel.style.display = "block";
     await select(m);
+    if (params.get("tab") === "validation" && VALIDATION[m.id]) openValidation(m.id);
     if (params.get("play") === "0") return;
     if (startCurrent) startCurrent();
     else if (m.site) d.view("moon");
   }
 
-  return { update, openFromUrl };
+  return { update, openFromUrl, followTarget };
 }

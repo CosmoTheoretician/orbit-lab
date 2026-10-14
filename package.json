@@ -20,7 +20,13 @@
     "joint": "tsx scripts/joint.ts",
     "global": "tsx scripts/global.ts",
     "single-loop": "tsx scripts/single-loop.ts",
-    "three-loops": "tsx scripts/three-loops.ts"
+    "three-loops": "tsx scripts/three-loops.ts",
+    "validate-camras": "tsx scripts/validate-camras.ts",
+    "fit-descent": "tsx scripts/fit-descent.ts",
+    "fit-powered-descent": "tsx scripts/fit-powered-descent.ts",
+    "two-way": "tsx scripts/two-way-test.ts",
+    "fit-braking": "tsx scripts/fit-braking.ts",
+    "plots": "tsx scripts/export-validation.ts && validation/.venv/bin/python validation/plots.py"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",

@@ -229,6 +229,7 @@ function setMissionMode(on: boolean) {
   }
   const hudEl = document.getElementById("hud");
   if (hudEl) hudEl.style.display = on ? "none" : "";
+  if (!on) setFocus(FOCUS_ORDER.indexOf("earth"));
 }
 
 const missions = createMissions({
@@ -346,6 +347,7 @@ const sunDir = new THREE.Vector3();
 
 // ---------- loop ----------
 let last = performance.now();
+const followTmp = new THREE.Vector3();
 function frame(now: number) {
   const dt = (now - last) / 1000;
   last = now;
@@ -377,6 +379,11 @@ function frame(now: number) {
   camera.position.add(tmp.clone().sub(lastFocus));
   controls.target.add(tmp.clone().sub(lastFocus));
   lastFocus.copy(tmp);
+  // In a mission, keep the spacecraft at the center of the view.
+  if (missions.followTarget(followTmp)) {
+    camera.position.add(followTmp.clone().sub(controls.target));
+    controls.target.copy(followTmp);
+  }
 
   selection.update(displayedMs);
   controls.update();

@@ -93,11 +93,35 @@ async function main() {
         const atLoi = transfer.samples.reduce((p, q) => (Math.abs(q.t - tLoi) < Math.abs(p.t - tLoi) ? q : p));
         const s0 = ops.samples[0];
         const gapKm = Math.hypot(atLoi.r[0] - s0.r[0], atLoi.r[1] - s0.r[1], atLoi.r[2] - s0.r[2]);
+        // Last two hours: reconstructed from Dwingeloo's Doppler (CAMRAS), if the fit has been run
+        const descent = await readJson<{ fit: Record<string, { value: number }>; impact: string; impactSpeedMs: number; rmsMs?: number; samples: Sample[] }>(
+          `validation/out/${m.id}-descent.json`,
+        );
+        let spliced: Sample[] = [...before, ...ops.samples];
+        let descentReport: Report = {};
+        if (descent && descent.samples.length) {
+          const tSplice = descent.samples[0].t;
+          const kept = spliced.filter((s) => s.t < tSplice);
+          const last = kept[kept.length - 1];
+          const first = descent.samples[0];
+          const gap = last ? Math.hypot(first.r[0] - last.r[0], first.r[1] - last.r[1], first.r[2] - last.r[2]) : 0;
+          spliced = [...kept, ...descent.samples];
+          const tRef = Date.parse("2025-06-05T17:10:00Z") / 1000;
+          const at = (k: string) => (descent.fit[k] ? new Date((tRef + descent.fit[k].value) * 1000).toISOString().slice(11, 19) + " UTC" : "?");
+          descentReport = {
+            descentSource: "last two hours fitted to Dwingeloo Radio Telescope (CAMRAS) Doppler",
+            deorbitBurn: at("deorbit"),
+            brakingStart: at("brake start"),
+            fittedImpact: descent.impact,
+            dopplerRmsMs: descent.rmsMs !== undefined ? +descent.rmsMs.toFixed(1) : "?",
+            descentJunctionGapKm: Math.round(gap),
+          };
+        }
         const opsReport: Report = { ...ops.report };
         delete opsReport.modeledPhase;
         result = {
-          samples: [...before, ...ops.samples],
-          report: { modeledPhase: transfer.phase, ...transfer.report, junctionGapKm: +gapKm.toFixed(3), ...opsReport },
+          samples: spliced,
+          report: { modeledPhase: transfer.phase, ...transfer.report, junctionGapKm: +gapKm.toFixed(3), ...opsReport, ...descentReport },
         };
         await write(m.id, "Transfer and lunar operations modeled from published milestones", result.samples, result.report, m.lunarOps.notes);
       } else {

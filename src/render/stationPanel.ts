@@ -103,6 +103,7 @@ export function createStationPanel(world: THREE.Group, station: GroundStation = 
 
   /** Call every frame with the displayed time (UTC ms). */
   function update(simMs: number) {
+    marker.visible = panel.style.display !== "none"; // marker follows the panel
     const date = new Date(simMs);
     const st = stationInertial(station, date);
     markerAttr.set(st);
