@@ -212,13 +212,34 @@ let paused = false;
 // ---------- ground station and lunar missions ----------
 const stationPanel = createStationPanel(world); // live pointing and Doppler from SES HQ Betzdorf
 
+// ---------- mission mode: satellites, their legend and the ground station step aside ----------
+let savedLayers: Record<string, boolean> | null = null;
+function setMissionMode(on: boolean) {
+  if (on && !savedLayers) {
+    savedLayers = { meo: meo.group.visible };
+    for (const op of OPERATOR_ORDER) {
+      savedLayers[op] = layers[op].visible;
+      layers[op].visible = false;
+    }
+    meo.group.visible = false;
+  } else if (!on && savedLayers) {
+    for (const op of OPERATOR_ORDER) layers[op].visible = savedLayers[op];
+    meo.group.visible = savedLayers.meo;
+    savedLayers = null;
+  }
+  const hudEl = document.getElementById("hud");
+  if (hudEl) hudEl.style.display = on ? "none" : "";
+}
+
 const missions = createMissions({
   world,
   moon: solar.moon,
   moonKm: solar.km.moon,
   camera,
   base: BASE,
-  onSelect: (m) => stationPanel.setMission(m),
+  onSelect: () => setMissionMode(true),
+  onExit: () => setMissionMode(false),
+  status: () => ({ warp, paused }),
   setMoonOverride: solar.setMoonOverride,
   jump: (tt, w) => {
     epoch = Epoch.fromTT(tt);
@@ -238,6 +259,8 @@ addEventListener("keydown", (e) => {
   if (e.key === " ") paused = !paused;
   if (e.key === "]") warp = Math.min(warp * 2, 65536);
   if (e.key === "[") warp = Math.max(warp / 2, 1 / 64);
+  if (e.key === "ArrowRight") warp = Math.min(warp * 2, 65536);
+  if (e.key === "ArrowLeft") warp = Math.max(warp / 2, 1 / 64);
   if (e.key === "r") { epoch = Epoch.now(); warp = 1; }
   if (e.key === "m") meo.group.visible = !meo.group.visible;
   if (e.key === ",") setFocus(focusIndex - 1);
@@ -301,7 +324,7 @@ function hudHtml(focusId: BodyId, catalogValid: boolean): string {
   const time = new Date(displayedMs).toISOString().replace("T", " ").slice(0, 19);
   const head =
     `${time} UTC · ×${warp}${paused ? " · paused" : ""} · ${fps.toFixed(0)} fps · ` +
-    `<b>${BODIES[focusId].name}</b> ${dim("[,] [.]")} · ${dim("[h] help")}`;
+    `<b>${BODIES[focusId].name}</b> ${dim("[,] [.]")} · ${dim("[←] [→] speed · [h] help")}`;
   const context =
     focusId === "earth" ? earthContext(catalogValid) : focusId === "moon" ? moonContext() : bodyContext(focusId);
   return `${head}\n\n${context}${showHelp ? `\n\n${dim(HELP)}` : ""}`;

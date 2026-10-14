@@ -267,7 +267,9 @@ export const MISSIONS: Mission[] = [
     site: { lat: 60.4445, lon: -4.588, label: "Resilience impact (Mare Frigoris)" },
     timeline: [
       { date: "2025-01-15", text: "Launch on Falcon 9 at 06:11:39 UTC with Blue Ghost" },
+      { date: "2025-01-16", text: "First orbit control maneuver at 19:40:18 UTC, about 250,000 km from Earth" },
       { date: "2025-02-14", text: "Lunar flyby, closest approach 22:43 UTC, ~8,400 km above the surface" },
+      { date: "2025-03-04", text: "Farthest point reached by this date: about 1.1 million km from Earth" },
       { date: "2025-04-24", text: "Deep-space maneuvers completed (10:00 UTC)" },
       { date: "2025-05-06", text: "Lunar orbit insertion at 20:41 UTC into a ~70 × 5,800 km orbit" },
       { date: "2025-05-28", text: "Circular ~100 km orbit reached after three maneuvers" },

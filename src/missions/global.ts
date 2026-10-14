@@ -8,6 +8,14 @@ export interface GlobalSpec extends JointSpec {
   apogeeMinKm: number;
   /** Flybys (best post-flyby fit first) kept for pairing with departure orbits. */
   keepFlybys: number;
+  /** Single loop after the flyby: stay at least this far from Earth (km); 0 or absent disables. */
+  minEarthAfterFlybyKm?: number;
+  /** No lunar encounter before the flyby: stay this far from the Moon until 2 days before it (km). */
+  minMoonBeforeFlybyKm?: number;
+  /** Perigee passes required between deployment and the flyby (2 = three Earth loops). */
+  minPerigeesBeforeFlyby?: number;
+  /** Departure apogee radii for the grid (km). */
+  departureApogeesKm?: number[];
 }
 
 /** Position mismatch / 20,000 km + velocity mismatch / 0.2 km/s, without allocations (called ~10^8 times). */
@@ -30,6 +38,9 @@ export function reconstructGlobal(spec: GlobalSpec, log: (s: string) => void = (
   const { tDep, tM1, tFb, tLoi, apoBy } = P.times;
   const dM1 = spec.firstManeuver.distanceKm;
   const apoKm = spec.apogee.distanceKm;
+  const minPost = spec.minEarthAfterFlybyKm ?? 0;
+  const minMoonPre = spec.minMoonBeforeFlybyKm ?? 0;
+  const minPerigees = spec.minPerigeesBeforeFlyby ?? 0;
   const K1 = 8;
   const K2 = 6;
   const s1 = Array.from({ length: K1 }, (_, k) => k / (K1 - 1));
@@ -75,6 +86,7 @@ export function reconstructGlobal(spec: GlobalSpec, log: (s: string) => void = (
             for (let k = 0; k < K2; k++) {
               const A = st[k];
               const B = arr[ib].st[k];
+              if (A.minEarthKm < minPost || B.minEarthKm < minPost) continue;
               const far = A.maxEarthKm >= B.maxEarthKm;
               const apKm = far ? A.maxEarthKm : B.maxEarthKm;
               const apT = far ? A.tMaxEarth : B.tMaxEarth;
@@ -82,6 +94,7 @@ export function reconstructGlobal(spec: GlobalSpec, log: (s: string) => void = (
               if (s < best.s) best = { s, ib, k };
             }
           }
+          if (best.ib < 0) continue;
           fly.push({ xf, post: best.s, ib: best.ib, k2: best.k, pre: Infinity, idep: -1, k1: 0 });
         }
       }
@@ -94,8 +107,10 @@ export function reconstructGlobal(spec: GlobalSpec, log: (s: string) => void = (
 
   // 3. Departure orbits: states at the first maneuver and at the correction checkpoints
   const deps: Array<{ xd: number[]; m1: number; st: State[] }> = [];
-  for (const raKm of [400_000, 600_000, 800_000, 1_100_000, 1_500_000]) {
-    for (const iDeg of [30, 40, 50, 60]) {
+  const incRange = spec.departureIncDeg;
+  const incs = incRange ? [0, 1, 2, 3].map((k) => incRange[0] + (k / 3) * (incRange[1] - incRange[0])) : [30, 40, 50, 60];
+  for (const raKm of spec.departureApogeesKm ?? [400_000, 600_000, 800_000, 1_100_000, 1_500_000]) {
+    for (const iDeg of incs) {
       for (let oDeg = 0; oDeg < 360; oDeg += 15) {
         for (let wDeg = 0; wDeg < 360; wDeg += 20) {
           const xd = [raKm / 1e5, iDeg * DEG, oDeg * DEG, wDeg * DEG, 30];
@@ -111,12 +126,14 @@ export function reconstructGlobal(spec: GlobalSpec, log: (s: string) => void = (
 
   // 4. Kept flybys backward to the correction checkpoints, paired with their best departure orbit
   for (const f of kept) {
-    const st = P.runTo(P.flyState(f.xf[0], f.xf[1], f.xf[2], f.xf[3]), tFb, [...preTimes].reverse());
+    const st = P.runTo(P.flyState(f.xf[0], f.xf[1], f.xf[2], f.xf[3]), tFb, [...preTimes].reverse(), undefined, 2 * DAY);
     if (!st) continue;
     const B = st.reverse(); // index k matches preTimes[k]
     for (let id = 0; id < deps.length; id++) {
       const D = deps[id];
       for (let k = 0; k < K1; k++) {
+        if (D.st[k].minMoonKm < minMoonPre || B[k].minMoonKm < minMoonPre) continue;
+        if (D.st[k].perigees + B[k].perigees < minPerigees) continue;
         const s = gap(D.st[k], B[k]) + D.m1;
         if (s < f.pre) {
           f.pre = s;
@@ -131,9 +148,11 @@ export function reconstructGlobal(spec: GlobalSpec, log: (s: string) => void = (
   log(`  ${ranked.length} flybys paired on both sides, best score ${(ranked[0].pre + ranked[0].post).toFixed(3)} (${secs()})`);
 
   // 5. Joint refinement of the best combinations; both maneuvers weighted equally
-  const tg: Targets = { m1: dM1, apo: apoKm, cap: Infinity, dv1Scale: 0.02 };
+  const tg: Targets = { m1: dM1, apo: apoKm, cap: Infinity, dv1Scale: 0.02, minEarthKm: minPost, minMoonPreKm: minMoonPre };
   const score = (r: Res) =>
-    (r.dv1 + r.dv2) * 1000 + Math.abs(r.m1 - dM1) / 10_000 + Math.max(0, apoKm - r.apoKm) / 10_000 + Math.max(0, r.apoT - apoBy) / DAY;
+    Math.max(0, minPost - r.minPostKm) / 100 +
+    Math.max(0, minMoonPre - r.minMoonPreKm) / 100 +
+    Math.max(0, minPerigees - r.perigeesPre) * 1000 + (r.dv1 + r.dv2) * 1000 + Math.abs(r.m1 - dM1) / 10_000 + Math.max(0, apoKm - r.apoKm) / 10_000 + Math.max(0, r.apoT - apoBy) / DAY;
   let sol: { x: number[]; cur: Res } | null = null;
   for (const [i, f] of ranked.slice(0, 10).entries()) {
     const D = deps[f.idep];
@@ -146,8 +165,10 @@ export function reconstructGlobal(spec: GlobalSpec, log: (s: string) => void = (
       continue;
     }
     log(`  start ${i + 1}: ${P.line(r2.cur, r2.x)}`);
-    const ok = r2.cur.mis1 < 1 && r2.cur.mis2 < 1;
-    const solOk = sol ? sol.cur.mis1 < 1 && sol.cur.mis2 < 1 : false;
+    const okR = (r: Res) =>
+      r.mis1 < 1 && r.mis2 < 1 && r.minPostKm >= minPost - 1000 && r.minMoonPreKm >= minMoonPre - 1000 && r.perigeesPre >= minPerigees;
+    const ok = okR(r2.cur);
+    const solOk = sol ? okR(sol.cur) : false;
     if (!sol || (ok && !solOk) || (ok === solOk && score(r2.cur) < score(sol.cur))) sol = r2;
   }
   if (!sol) throw new Error("no combination could be refined");

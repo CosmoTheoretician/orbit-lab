@@ -39,6 +39,8 @@ export interface JointSpec {
   /** Continuation only: final cap on the pre-flyby correction (m/s), and the number of steps. */
   correctionCapMs?: number;
   steps?: number;
+  /** Allowed departure inclination range (degrees); absent = no limit. */
+  departureIncDeg?: [number, number];
 }
 
 export interface State {
@@ -46,6 +48,11 @@ export interface State {
   v: Vec3;
   maxEarthKm: number;
   tMaxEarth: number;
+  minEarthKm: number;
+  /** Perigee passes (local minima of the Earth distance below 200,000 km) since the leg's start. */
+  perigees: number;
+  /** Closest Moon distance since the leg's start, ignoring its first moonExclude seconds. */
+  minMoonKm: number;
 }
 
 export interface Targets {
@@ -55,6 +62,10 @@ export interface Targets {
   cap: number;
   /** Scale of the correction Δv in the residual (km/s): 0.02 weighs it like the DSM, 0.2 more loosely. */
   dv1Scale: number;
+  /** Minimum Earth distance after the flyby (km); 0 or absent disables. */
+  minEarthKm?: number;
+  /** Minimum Moon distance before the flyby's final approach (km); 0 or absent disables. */
+  minMoonPreKm?: number;
 }
 
 export interface Res {
@@ -66,6 +77,9 @@ export interface Res {
   m1: number;
   apoKm: number;
   apoT: number;
+  minPostKm: number;
+  minMoonPreKm: number;
+  perigeesPre: number;
 }
 
 function solve(A: number[][], b: number[]): number[] | null {
@@ -154,11 +168,16 @@ export function createJointProblem(spec: JointSpec) {
   }
 
   /** Integrates through a list of times (in the direction of travel). Null on Earth/Moon impact or escape. */
-  function runTo(y0: Float64Array, tStart: number, times: number[], samples?: Sample[]): State[] | null {
+  function runTo(y0: Float64Array, tStart: number, times: number[], samples?: Sample[], moonExclude = 0): State[] | null {
     let y = y0;
     let t = tStart;
     let maxE = 0;
     let tMaxE = tStart;
+    let minE = Infinity;
+    let minM = Infinity;
+    let perigees = 0;
+    let prevR = NaN;
+    let prevDr = 0;
     let dead = false;
     const out: State[] = [];
     for (const tNext of times) {
@@ -166,6 +185,13 @@ export function createJointProblem(spec: JointSpec) {
         onStep: (ts, ys) => {
           samples?.push({ t: ts, r: [ys[0], ys[1], ys[2]], v: [ys[3], ys[4], ys[5]] });
           const rE = Math.hypot(ys[0], ys[1], ys[2]);
+          if (rE < minE) minE = rE;
+          if (!Number.isNaN(prevR)) {
+            const dr = rE - prevR;
+            if (prevDr < 0 && dr >= 0 && prevR < 200_000) perigees++;
+            if (dr !== 0) prevDr = dr;
+          }
+          prevR = rE;
           if (rE > maxE) {
             maxE = rE;
             tMaxE = ts;
@@ -174,12 +200,12 @@ export function createJointProblem(spec: JointSpec) {
             dead = true;
             return true;
           }
-          if (Math.abs(ts - tStart) > 3600) {
-            const m = moonAt(ts);
-            if (Math.hypot(ys[0] - m[0], ys[1] - m[1], ys[2] - m[2]) < R_M) {
-              dead = true;
-              return true;
-            }
+          const m = moonAt(ts);
+          const dM = Math.hypot(ys[0] - m[0], ys[1] - m[1], ys[2] - m[2]);
+          if (Math.abs(ts - tStart) > moonExclude && dM < minM) minM = dM;
+          if (Math.abs(ts - tStart) > 3600 && dM < R_M) {
+            dead = true;
+            return true;
           }
           return false;
         },
@@ -187,7 +213,7 @@ export function createJointProblem(spec: JointSpec) {
       if (dead) return null;
       y = res.y;
       t = tNext;
-      out.push({ r: [y[0], y[1], y[2]], v: [y[3], y[4], y[5]], maxEarthKm: maxE, tMaxEarth: tMaxE });
+      out.push({ r: [y[0], y[1], y[2]], v: [y[3], y[4], y[5]], maxEarthKm: maxE, tMaxEarth: tMaxE, minEarthKm: minE, perigees, minMoonKm: minM });
     }
     return out;
   }
@@ -207,7 +233,7 @@ export function createJointProblem(spec: JointSpec) {
     const tC = tCorrOf(x[5]);
     const tD = tDsmOf(x[12]);
     const dep = cached(0, x.slice(0, 6), () => runTo(deployState(x[0], x[1], x[2], x[3], x[4]), tDep, [tM1, tC]));
-    const fbB = cached(1, [...x.slice(6, 10), x[5]], () => runTo(flyState(x[6], x[7], x[8], x[9]), tFb, [tC]));
+    const fbB = cached(1, [...x.slice(6, 10), x[5]], () => runTo(flyState(x[6], x[7], x[8], x[9]), tFb, [tC], undefined, 2 * DAY));
     const fbF = cached(2, [...x.slice(6, 10), x[12]], () => runTo(flyState(x[6], x[7], x[8], x[9]), tFb, [tD]));
     const arB = cached(3, [x[10], x[11], x[12]], () => runTo(arrivalState(x[10], x[11]), tLoi, [tD]));
     if (!dep || !fbB || !fbF || !arB) return null;
@@ -221,6 +247,9 @@ export function createJointProblem(spec: JointSpec) {
       dr2: sub(A.r, B.r),
       dv2: sub(B.v, A.v),
       apo,
+      minPost: Math.min(A.minEarthKm, B.minEarthKm),
+      minMoonPre: Math.min(dep[1].minMoonKm, fbB[0].minMoonKm),
+      perigeesPre: dep[1].perigees + fbB[0].perigees,
     };
   }
 
@@ -237,13 +266,16 @@ export function createJointProblem(spec: JointSpec) {
       (l.m1 - tg.m1) / 5_000,
       (l.apo.km - tg.apo) / 50_000,
       Math.max(0, l.apo.t - apoBy) / (3 * DAY),
+      Math.max(0, (tg.minEarthKm ?? 0) - l.minPost) / 20_000,
+      Math.max(0, (tg.minMoonPreKm ?? 0) - l.minMoonPre) / 20_000,
     ];
-    return { F, mis1: norm(l.dr1), mis2: norm(l.dr2), dv1, dv2: norm(l.dv2), m1: l.m1, apoKm: l.apo.km, apoT: l.apo.t };
+    return { F, mis1: norm(l.dr1), mis2: norm(l.dr2), dv1, dv2: norm(l.dv2), m1: l.m1, apoKm: l.apo.km, apoT: l.apo.t, minPostKm: l.minPost, minMoonPreKm: l.minMoonPre, perigeesPre: l.perigeesPre };
   }
   const cost = (r: Res) => r.F.reduce((s, f) => s + f * f, 0);
 
   function clampX(x: number[]) {
     x[0] = Math.max(x[0], 0.7);
+    if (spec.departureIncDeg) x[1] = Math.min(spec.departureIncDeg[1] * DEG, Math.max(spec.departureIncDeg[0] * DEG, x[1]));
     x[4] = Math.min(maxPeriMin, Math.max(2, x[4]));
     x[5] = clamp01(x[5]);
     x[9] = Math.max(x[9], 0.5);
@@ -303,7 +335,7 @@ export function createJointProblem(spec: JointSpec) {
     `correction ${(r.dv1 * 1000).toFixed(1)} m/s on ${iso(tCorrOf(x[5])).slice(0, 10)}, ` +
     `DSM ${(r.dv2 * 1000).toFixed(1)} m/s on ${iso(tDsmOf(x[12])).slice(0, 10)}, total ${((r.dv1 + r.dv2) * 1000).toFixed(1)} m/s, ` +
     `first maneuver at ${Math.round(r.m1).toLocaleString("en")} km, max ${Math.round(r.apoKm).toLocaleString("en")} km on ${iso(r.apoT).slice(0, 10)}, ` +
-    `mismatch ${r.mis1.toFixed(3)} / ${r.mis2.toFixed(3)} km`;
+    `${r.perigeesPre + 1} Earth loops, Moon ≥ ${Math.round(r.minMoonPreKm).toLocaleString("en")} km before flyby, closest after flyby ${Math.round(r.minPostKm).toLocaleString("en")} km, mismatch ${r.mis1.toFixed(3)} / ${r.mis2.toFixed(3)} km`;
 
   /** Full sampled path: deployment → correction → flyby → DSM → LOI, strictly increasing in time. */
   function trajectory(x: number[]): Sample[] {
@@ -355,6 +387,26 @@ export function createJointProblem(spec: JointSpec) {
       const r = norm(s.r);
       if (r < close.km) close = { km: r, t: s.t };
     }
+    let post = { km: Infinity, t: tFb };
+    for (const s of samples) {
+      if (s.t <= tFb + DAY || s.t >= tLoi - DAY) continue;
+      const r = norm(s.r);
+      if (r < post.km) post = { km: r, t: s.t };
+    }
+    let loopsPre = 1;
+    let moonPre = Infinity;
+    for (let i = 1; i < samples.length - 1; i++) {
+      const s = samples[i];
+      if (s.t >= tFb) break;
+      const rPrev = norm(samples[i - 1].r);
+      const r = norm(s.r);
+      const rNext = norm(samples[i + 1].r);
+      if (r < rPrev && r <= rNext && r < 200_000) loopsPre++;
+      if (s.t < tFb - 2 * DAY) {
+        const m = moonAt(s.t);
+        moonPre = Math.min(moonPre, Math.hypot(s.r[0] - m[0], s.r[1] - m[1], s.r[2] - m[2]));
+      }
+    }
     const rCapPeri = R_M + spec.capture.periAltKm;
     const rCapApo = R_M + spec.capture.apoAltKm;
     const vCapture = Math.sqrt(MU_M * (2 / rCapPeri - 2 / (rCapPeri + rCapApo)));
@@ -373,6 +425,10 @@ export function createJointProblem(spec: JointSpec) {
       correctionAt: iso(tC),
       preFlybyClosestEarthKm: Math.round(close.km),
       preFlybyClosestEarthAt: iso(close.t),
+      postFlybyClosestEarthKm: Math.round(post.km),
+      postFlybyClosestEarthAt: iso(post.t),
+      earthLoopsBeforeFlyby: loopsPre,
+      closestMoonBeforeFlybyKm: Math.round(moonPre),
       flybyVInfinityKms: +Math.sqrt(Math.max(0, x[9] * x[9] - (2 * MU_M) / rFb)).toFixed(3),
       maxEarthDistanceKm: Math.round(cur.apoKm),
       maxEarthDistanceAt: iso(cur.apoT),

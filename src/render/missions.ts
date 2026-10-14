@@ -12,6 +12,58 @@ const DEG = Math.PI / 180;
 /** Within this distance of the Moon (roughly its sphere of influence), trajectories are drawn Moon-relative. */
 const NEAR_MOON_KM = 60_000;
 
+/** Mission phases shown under the title (for Resilience, ispace's own names from its Mission 2 graphic). */
+const PHASES: Record<string, Array<{ from: string; name: string }>> = {
+  resilience: [
+    { from: "2025-01-15T06:11:39Z", name: "Earth orbiting phase" },
+    { from: "2025-02-14T22:43:00Z", name: "Low-energy transfer" },
+    { from: "2025-05-06T20:41:00Z", name: "Lunar orbiting phase" },
+    { from: "2025-06-05T19:17:00Z", name: "After impact" },
+  ],
+};
+const ttOf = (iso: string) => Epoch.fromUnixMs(Date.parse(iso)).tt;
+
+function phaseAt(id: string, tt: number): string {
+  const phases = PHASES[id];
+  if (!phases) return "";
+  if (tt < ttOf(phases[0].from)) return "Before launch";
+  let name = phases[0].name;
+  for (const p of phases) if (tt >= ttOf(p.from)) name = p.name;
+  return name;
+}
+
+const kmText = (v: unknown) => `${Number(v).toLocaleString("en")} km`;
+const dateText = (v: unknown) => String(v).slice(0, 10);
+
+/** Readable summary of a trajectory report; the raw solver output stays available, folded away. */
+function reportHtml(r: Record<string, unknown>): string {
+  const has = (...keys: string[]) => keys.every((k) => r[k] !== undefined);
+  const rows: Array<[string, string]> = [];
+  if (has("departureOrbitKm")) {
+    const inc = has("departureInclinationDeg") ? `, ${r.departureInclinationDeg}° inclination` : "";
+    rows.push(["Departure orbit", `${r.departureOrbitKm} km${inc}`]);
+  }
+  if (has("distanceAtFirstManeuverKm")) {
+    const pub = has("publishedFirstManeuver") ? ` (published: ${String(r.publishedFirstManeuver).split(" (")[0]})` : "";
+    rows.push(["At first maneuver", `${kmText(r.distanceAtFirstManeuverKm)} from Earth${pub}`]);
+  }
+  if (has("correctionManeuverMs", "correctionAt")) rows.push(["Correction", `${r.correctionManeuverMs} m/s on ${dateText(r.correctionAt)}`]);
+  if (has("lunarPasses")) rows.push(["Lunar passes", String(r.lunarPasses)]);
+  if (has("flybyVInfinityKms")) rows.push(["Flyby speed (v∞)", `${r.flybyVInfinityKms} km/s`]);
+  if (has("maxEarthDistanceKm", "maxEarthDistanceAt")) {
+    const pub = has("publishedMaxDistance") ? ` (published: ${r.publishedMaxDistance})` : "";
+    rows.push(["Farthest point", `${kmText(r.maxEarthDistanceKm)} on ${dateText(r.maxEarthDistanceAt)}${pub}`]);
+  }
+  if (has("deepSpaceManeuverMs", "maneuverAt")) rows.push(["Deep-space maneuver", `${r.deepSpaceManeuverMs} m/s on ${dateText(r.maneuverAt)}`]);
+  if (has("totalTransferDvMs")) rows.push(["Transfer Δv", `${r.totalTransferDvMs} m/s in total`]);
+  if (has("loiDeltaVToCaptureMs")) rows.push(["Orbit insertion Δv", `${r.loiDeltaVToCaptureMs} m/s`]);
+  if (has("arrivalInclinationDeg")) rows.push(["Lunar orbit inclination", `${r.arrivalInclinationDeg}°`]);
+  const line = (k: string, v: unknown, sep: string) => `<div><span style="color:#7f93ad">${k}${sep}</span> ${v}</div>`;
+  const summary = rows.map(([k, v]) => line(k, v, ":")).join("");
+  const raw = Object.entries(r).map(([k, v]) => line(k, v, "")).join("");
+  return `${summary}<details style="margin-top:6px"><summary style="cursor:pointer;color:#8fa6c4">Solver details</summary>${raw}</details>`;
+}
+
 export const OUTCOME: Record<Outcome, { color: number; text: string }> = {
   landed: { color: 0x4cd964, text: "Landed" },
   "landed-anomaly": { color: 0xffcc00, text: "Landed with an anomaly" },
@@ -71,7 +123,12 @@ export interface MissionDeps {
   jump(tt: number, warp: number): void;
   /** Move the camera; for the Earth–Moon view, an optional distance in render units. */
   view(kind: "earth-moon" | "moon", distance?: number): void;
+  /** A mission was opened (mission mode on). */
   onSelect?(m: Mission): void;
+  /** Back to the list (mission mode off). */
+  onExit?(): void;
+  /** Clock state for the title: time warp and pause. */
+  status?(): { warp: number; paused: boolean };
 }
 
 interface Segment {
@@ -250,7 +307,7 @@ export function createMissions(d: MissionDeps) {
         ghostLabel.textContent = `Moon · ${day(tGhost)}`;
         Object.assign(ghostLabel.style, {
           position: "fixed", color: "#8fa6c4", font: "11px ui-monospace, monospace",
-          pointerEvents: "none", display: "none", transform: "translate(8px, -50%)",
+          pointerEvents: "none", display: "none", transform: "translate(14px, -50%)",
         });
         document.body.appendChild(ghostLabel);
       }
@@ -274,7 +331,7 @@ export function createMissions(d: MissionDeps) {
     return { startsNearMoon: near[0], hasGeo: near.some((x) => !x), maxGeoKm };
   }
 
-  // ---------- panel ----------
+  // ---------- panel: mission list, or one mission's tab ----------
   const button = document.createElement("button");
   button.textContent = "☾ Lunar missions [l]";
   Object.assign(button.style, {
@@ -290,12 +347,39 @@ export function createMissions(d: MissionDeps) {
     padding: "8px 10px", borderRadius: "6px", display: "none",
   });
   const list = document.createElement("div");
+  const tab = document.createElement("div");
+  tab.style.display = "none";
+  const back = document.createElement("button");
+  back.textContent = "← Back to list";
+  Object.assign(back.style, {
+    font: "12px ui-monospace, monospace", color: "#cfe3ff", background: "#1c2836",
+    border: "1px solid #3a4a60", borderRadius: "4px", padding: "2px 8px", cursor: "pointer",
+  });
   const details = document.createElement("div");
   details.style.marginTop = "8px";
   const timeHint = document.createElement("div");
   Object.assign(timeHint.style, { marginTop: "6px", color: "#ffd60a" });
-  panel.append(list, details, timeHint);
+  tab.append(back, details, timeHint);
+  panel.append(list, tab);
   document.body.appendChild(panel);
+
+  // ---------- title at the top center while a mission is open ----------
+  const title = document.createElement("div");
+  Object.assign(title.style, {
+    position: "fixed", top: "8px", left: "50%", transform: "translateX(-50%)", textAlign: "center",
+    background: "rgba(0,0,0,.6)", padding: "4px 14px", borderRadius: "6px", pointerEvents: "none", display: "none",
+  });
+  const titleName = document.createElement("div");
+  Object.assign(titleName.style, { color: "#fff", font: "14px/1.4 ui-monospace, monospace" });
+  const titleSub = document.createElement("div");
+  Object.assign(titleSub.style, { color: "#8fa6c4", font: "11px/1.4 ui-monospace, monospace" });
+  const titlePhase = document.createElement("div");
+  Object.assign(titlePhase.style, { color: "#ffd60a", font: "12px/1.4 ui-monospace, monospace", display: "none" });
+  const titleKeys = document.createElement("div");
+  Object.assign(titleKeys.style, { color: "#5f7390", font: "10px/1.4 ui-monospace, monospace" });
+  titleKeys.textContent = "← → speed · space pause";
+  title.append(titleName, titlePhase, titleSub, titleKeys);
+  document.body.appendChild(title);
 
   const toggle = () => (panel.style.display = panel.style.display === "none" ? "block" : "none");
   button.onclick = toggle;
@@ -305,6 +389,13 @@ export function createMissions(d: MissionDeps) {
 
   let selected: Mission | null = null;
   let startCurrent: (() => void) | null = null;
+
+  function showTab(open: boolean) {
+    list.style.display = open ? "none" : "block";
+    tab.style.display = open ? "block" : "none";
+    title.style.display = open ? "block" : "none";
+    panel.scrollTop = 0;
+  }
 
   function renderList() {
     list.innerHTML = "";
@@ -321,10 +412,9 @@ export function createMissions(d: MissionDeps) {
           row.innerHTML =
             `<span style="color:${hex(OUTCOME[m.outcome].color)}">●</span> ${m.name} ` +
             `<span style="color:#7f93ad">${m.launch.slice(0, 4)} · ${m.operator}</span>`;
-          Object.assign(row.style, {
-            cursor: "pointer", padding: "1px 4px", borderRadius: "3px",
-            background: selected?.id === m.id ? "rgba(100,160,255,.18)" : "transparent",
-          });
+          Object.assign(row.style, { cursor: "pointer", padding: "1px 4px", borderRadius: "3px" });
+          row.onmouseenter = () => (row.style.background = "rgba(100,160,255,.18)");
+          row.onmouseleave = () => (row.style.background = "transparent");
           row.onclick = () => void select(m);
           list.appendChild(row);
         }
@@ -340,11 +430,11 @@ export function createMissions(d: MissionDeps) {
       `<div style="color:#fff;font-size:13px">${m.name}</div>` +
       `<div>${m.operator} · ${m.country}</div>` +
       `<div><span style="color:${hex(OUTCOME[m.outcome].color)}">●</span> ${OUTCOME[m.outcome].text} · launch ${m.launch}</div>` +
-      `<div style="margin-top:4px">${m.summary}</div>` +
+      `<div id="mission-buttons" style="margin-top:6px;display:flex;gap:6px"></div>` +
+      `<div style="margin-top:6px">${m.summary}</div>` +
       (m.site ? `<div style="margin-top:4px">${m.site.label}: ${site}</div>` : "") +
       `<div style="margin-top:4px">${m.timeline.map((e) => `<div>${e.date} · ${e.text}</div>`).join("")}</div>` +
-      `<div style="margin-top:6px;color:#8fa6c4">${status}</div>` +
-      `<div id="mission-buttons" style="margin-top:6px;display:flex;gap:6px"></div>`;
+      `<div style="margin-top:6px;color:#8fa6c4">${status}</div>`;
     addShare(m);
   }
 
@@ -375,14 +465,29 @@ export function createMissions(d: MissionDeps) {
     details.querySelector("#mission-buttons")!.appendChild(b);
   }
 
+  function closeMission() {
+    selected = null;
+    startCurrent = null;
+    clearTrack();
+    highlight.visible = false;
+    timeHint.textContent = "";
+    history.replaceState(null, "", location.pathname);
+    showTab(false);
+    d.onExit?.();
+  }
+  back.onclick = closeMission;
+
   async function select(m: Mission) {
     selected = m;
-    d.onSelect?.(m);
-    renderList();
-    clearTrack();
     startCurrent = null;
-    history.replaceState(null, "", `?mission=${m.id}`);
+    clearTrack();
     timeHint.textContent = "";
+    history.replaceState(null, "", `?mission=${m.id}`);
+    titleName.innerHTML = `<span style="color:${hex(OUTCOME[m.outcome].color)}">●</span> ${m.name}`;
+    titleSub.textContent = m.operator;
+    titlePhase.style.display = "none";
+    showTab(true);
+    d.onSelect?.(m);
 
     if (m.site) {
       highlightAttr.set(siteXYZ(m.site.lat, m.site.lon));
@@ -431,9 +536,7 @@ export function createMissions(d: MissionDeps) {
     const kind = file.modeled
       ? "<b>Modeled from published milestones, not tracking data.</b>"
       : `Trajectory: JPL Horizons (${file.horizonsId})`;
-    const rows = file.report
-      ? Object.entries(file.report).map(([k, v]) => `<div><span style="color:#7f93ad">${k}</span> ${v}</div>`).join("")
-      : "";
+    const rows = file.report ? reportHtml(file.report) : "";
     renderDetails(m, `${kind}<div>${fmt(t0)} → ${fmt(t1)} · ${tr.t.length} states</div>${rows}`);
 
     // Earth–Moon view sized to the whole trajectory (render units: 1 = 1000 km)
@@ -489,6 +592,14 @@ export function createMissions(d: MissionDeps) {
   }
 
   function update(epoch: Epoch) {
+    if (selected) {
+      const st = d.status?.();
+      const speed = !st ? "" : st.paused ? " · paused" : ` · ×${st.warp >= 1 ? st.warp : `1/${Math.round(1 / st.warp)}`}`;
+      titleSub.textContent = `${selected.operator} · ${fmt(epoch.tt)}${speed}`;
+      const phase = phaseAt(selected.id, epoch.tt);
+      titlePhase.textContent = phase;
+      titlePhase.style.display = phase ? "block" : "none";
+    }
     if (!track) return;
     const t = epoch.tt;
 
