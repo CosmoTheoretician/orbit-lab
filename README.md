@@ -4,8 +4,6 @@
 
 **A browser-based orbital mechanics and flight dynamics sandbox: the live satellite catalog with a validated SGP4 pipeline, a simulated model of SES's meoSphere constellation, the whole solar system with real ephemerides, lunar missions from tracking data and from own reconstructions, a ground-station planner for SES HQ Betzdorf, and a relay-coverage analysis of lunar communication constellations.**
 
-> **Live demo:** [x]()
-
 ![Orbit Lab](docs/screenshot.png)
 
 Independent student project, not affiliated with or endorsed by SES or any other company mentioned. Wherever a value is assumed, modeled or representative rather than published, the app and this README say so.
