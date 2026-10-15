@@ -618,7 +618,7 @@ export function createMissions(d: MissionDeps) {
           title: "What happened",
           text:
             "Resilience coasted down to about 26 km, started its main-engine braking at about 19:03:30, switched to a harder final phase near 19:10, " +
-            "and hit the surface at 19:15:34, 1.5 km from the crater — consistent with ispace's account of a descent that did not slow down enough.",
+            "and hit the surface at 19:15:34, 1.5 km from the crater. That's consistent with ispace's account of a descent that did not slow down enough.",
         },
       ],
       sequence: [

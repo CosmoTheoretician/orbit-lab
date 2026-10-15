@@ -103,7 +103,7 @@ if before:
     ax.scatter(dt(before["unix"]), before["residual_ms"], s=3, color=RES)
     ax.axhline(0, color=DIM, lw=0.8)
     ax.set_ylabel("measured − model (m/s)")
-    ax.set_title(f"First comparison: milestone model, one-way link — off by {rms(before['residual_ms']):.0f} m/s")
+    ax.set_title(f"First comparison: milestone model, one-way link, off by {rms(before['residual_ms']):.0f} m/s")
     decorate(ax, marks=False)
     save(fig, "02-before.png")
 
