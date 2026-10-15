@@ -384,6 +384,7 @@ export function createMissions(d: MissionDeps) {
   document.body.appendChild(title);
 
   const toggle = () => (panel.style.display = panel.style.display === "none" ? "block" : "none");
+  panel.style.display = "none"; // closed until the user opens it (button or "l")
   button.onclick = toggle;
   addEventListener("keydown", (e) => {
     if (e.key === "l") toggle();
@@ -804,7 +805,6 @@ export function createMissions(d: MissionDeps) {
     const params = new URLSearchParams(location.search);
     const m = MISSIONS.find((x) => x.id === params.get("mission"));
     if (!m) return;
-    panel.style.display = "block";
     await select(m);
     if (params.get("tab") === "validation" && VALIDATION[m.id]) openValidation(m.id);
     if (params.get("play") === "0") return;
